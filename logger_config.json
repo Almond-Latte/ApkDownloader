@@ -1,0 +1,44 @@
+{
+  "version":1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "minimum":{
+        "format": "%(asctime)s [%(levelname)s]: %(message)s"
+    },
+    "simple": {
+      "format": "%(asctime)s %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s"
+    }
+  },
+
+  "handlers": {
+    "consoleHandler": {
+      "class": "logging.StreamHandler",
+      "level": "DEBUG",
+      "formatter": "simple",
+      "stream": "ext://sys.stdout"
+    },
+
+    "fileHandler": {
+      "class": "logging.FileHandler",
+      "level": "DEBUG",
+      "formatter": "simple",
+      "filename": "",
+      "encoding": "utf-8"
+    }
+  },
+
+  "loggers": {
+    "__main__": {
+      "level": "DEBUG",
+      "handlers": ["fileHandler"]
+    },
+
+    "DownloadHandler": {
+      "level": "DEBUG",
+      "handlers": ["consoleHandler", "fileHandler"]
+    }
+  },
+  "root": {
+    "level": "ERROR"
+  }
+}
