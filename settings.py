@@ -1,44 +1,33 @@
-import os
+# settings.py
+# Stores default configuration values.
+
 import sys
-from datetime import datetime
+from datetime import datetime, timezone # Import timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
-from rich.console import Console
+# --- Default Paths ---
+_SCRIPT_DIR: Path = Path(__file__).parent.resolve()
+DEFAULT_LOG_DIR: Path = _SCRIPT_DIR / "log"
+DEFAULT_DOWNLOAD_DIR: Path = _SCRIPT_DIR / "Downloads"
+DEFAULT_CACHE_DIR: Path = _SCRIPT_DIR / "_cache"
+DEFAULT_LOGGER_CONFIG_PATH: Path = _SCRIPT_DIR / "logger_config.json"
+DEFAULT_ENV_PATH: Path = _SCRIPT_DIR / ".env"
 
-console = Console()
+# --- Default API and Data Settings ---
+DEFAULT_URL: str = "https://androzoo.uni.lu/api/download"
+DEFAULT_MALWARE_THRESHOLD: int = 5
+DEFAULT_N_MALWARE: int = 10
+DEFAULT_N_CLEANWARE: int = 10
 
+# --- Default Date Range Settings (as strings) ---
+# Start date (e.g., beginning of last year)
+DEFAULT_DATE_START_STR: str = "2023-01-01 00:00:00"
+# End date (e.g., today's date at the beginning of the day, UTC)
+# Use timezone.utc for consistency
+DEFAULT_DATE_END_STR: str = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
 
-def load_env(key: str) -> str:
-    """"""
-    val = os.getenv(key)
-    if val is None:
-        console.log(
-            f"Error: {key} is not set as an environment variable. \
-            Consider adding {key} to the .env file.",
-        )
-        sys.exit()
-    return val
+# --- Default Performance Settings ---
+DEFAULT_CONCURRENT_DOWNLOADS: int = 5
 
-
-dirname: Path = Path(__file__).parent
-log_dir_path: Path = Path.joinpath(dirname, Path("log"))
-log_dir_path.mkdir(exist_ok=True)
-
-LOG_FILE_PATH: Path = Path.joinpath(
-    log_dir_path, Path(f"{datetime.now(ZoneInfo("Asia/Tokyo")):%Y%m%d_%H%M%S}.log"),
-)
-LOGGER_CONFIG_PATH: Path = Path.joinpath(dirname, Path("logger_config.json"))
-
-# Read .env File
-dotenv_path: Path = Path.joinpath(dirname, ".env")
-load_dotenv(dotenv_path, override=True)
-URL: str = load_env("URL")
-API_KEY: str = load_env("API_KEY")
-APK_LIST_PATH: Path = Path(load_env("APK_LIST"))
-MALWARE_THRESHOLD: int = int(load_env("MALWARE_THRESHOLD"))
-N_MALWARE: int = int(load_env("N_MALWARE"))
-N_CLEANWARE: int = int(load_env("N_CLEANWARE"))
-DATE_AFTER: datetime = datetime.strptime(load_env("DATE_AFTER"), "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("Europe/Paris"))
-CONCURRENT_DOWNLOADS: int = int(load_env("CONCURRENT_DOWNLOADS"))
+# No active code here, just constants/defaults.

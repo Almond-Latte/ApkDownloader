@@ -1,0 +1,12 @@
+[project]
+name = "apkdownloader"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "polars>=1.27.1",
+    "python-dotenv>=1.1.0",
+    "requests>=2.32.3",
+    "typer>=0.15.2",
+]
