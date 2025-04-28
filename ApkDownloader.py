@@ -745,6 +745,64 @@ class ApkDownloader:
             self._refresh_live_display()
             return [], []
 
+    def calculate_total_download_size(self, force_recollect: bool = False) -> None:
+        """
+        Calculates the total size of APKs to be downloaded using cached JSONL files.
+        """
+        logger = getattr(self, 'logger', None)
+        self.console.print("[bold blue]Estimating total download size using cache...[/bold blue]")
+
+        # Ensure cache file paths have been generated
+        if not hasattr(self, 'cleanware_cache_file') or not hasattr(self, 'malware_cache_file'):
+            self.console.print("[bold red]Error: Cache filenames not generated. Cannot calculate download size.[/bold red]")
+            return
+
+        # Check if both cache files exist
+        if not self.cleanware_cache_file.exists() or not self.malware_cache_file.exists():
+            self.console.print("[bold red]Error: Cache files not found. Cannot calculate download size.[/bold red]")
+            return
+
+        try:
+            # Read cleanware and malware cache files
+            cleanware_size_bytes = 0
+            malware_size_bytes = 0
+
+            with self.cleanware_cache_file.open(mode="r", encoding="utf-8") as f:
+                for line in f:
+                    json_data = json.loads(line)
+                    apk_size = json_data.get("apk_size", 0)
+                    if isinstance(apk_size, int) and apk_size > 0:
+                        cleanware_size_bytes += apk_size
+
+            with self.malware_cache_file.open(mode="r", encoding="utf-8") as f:
+                for line in f:
+                    json_data = json.loads(line)
+                    apk_size = json_data.get("apk_size", 0)
+                    if isinstance(apk_size, int) and apk_size > 0:
+                        malware_size_bytes += apk_size
+
+            total_size_bytes = cleanware_size_bytes + malware_size_bytes
+
+            # Format and display the sizes
+            def format_size(size_bytes: int) -> str:
+                if size_bytes >= (1024 ** 3):
+                    return f"{size_bytes / (1024 ** 3):.2f} GB"
+                elif size_bytes >= (1024 ** 2):
+                    return f"{size_bytes / (1024 ** 2):.2f} MB"
+                elif size_bytes >= 1024:
+                    return f"{size_bytes / 1024:.2f} KB"
+                return f"{size_bytes} bytes"
+
+            self.console.print(f"[green]Estimated total size of malware to download:[/green] {format_size(malware_size_bytes)}")
+            self.console.print(f"[green]Estimated total size of cleanware to download:[/green] {format_size(cleanware_size_bytes)}")
+            self.console.print(f"[bold green]Estimated total download size:[/bold green] {format_size(total_size_bytes)}")
+
+        except (IOError, json.JSONDecodeError) as e:
+            if logger: logger.error(f"Error reading cache files for size estimation: {e}")
+            self.console.print(f"[bold red]Error reading cache files for size estimation:[/bold red] {e}")
+        except Exception as e:
+            if logger: logger.exception(f"Unexpected error during size estimation: {e}")
+            self.console.print(f"[bold red]Unexpected error during size estimation:[/bold red] {e}")
 
     def download_handler( self, json_data: Json, task_id: TaskID, download_dir: Path) -> bool:
         """Downloads a single APK file identified by its SHA256 hash."""
@@ -1306,15 +1364,19 @@ def main(
             # Check the status of hash collection
             collection_status = downloader.progress_status.get(TodoCode.CHL)
 
-            # 2. Download APKs only if hash collection was successful
+            # 2. Calculate total download size before proceeding to downloads
+            if collection_status == StatusCode.SUCCESS:
+                downloader.calculate_total_download_size(force_recollect=force_recollect)
+
+            # 3. Download APKs only if hash collection was successful
             if collection_status == StatusCode.SUCCESS:
                 downloader.download_apks(sampled_cleanware, sampled_malware)
             elif collection_status == StatusCode.STOPPED:
-                 console.print("[bold yellow]Process stopped during hash collection. Skipping downloads.[/bold yellow]")
-                 time.sleep(1)
-            else: # ERROR
-                 console.print("[bold red]Hash collection failed. Skipping downloads.[/bold red]")
-                 time.sleep(1)
+                console.print("[bold yellow]Process stopped during hash collection. Skipping downloads.[/bold yellow]")
+                time.sleep(1)
+            else:  # ERROR
+                console.print("[bold red]Hash collection failed. Skipping downloads.[/bold red]")
+                time.sleep(1)
 
             # --- Final Status Display Before Screen Closes ---
             if downloader:
@@ -1375,9 +1437,10 @@ def main(
             final_status = StatusCode.ERROR
         # If collection succeeded and download either succeeded or was skipped (WAITING)
         elif collection_status == StatusCode.SUCCESS and download_status in [StatusCode.SUCCESS, StatusCode.WAITING]:
-            # Treat as overall success if collection was successful, even if no downloads were needed.
+            # Treat as overall success if collection was successful, even if no downloads were
+            # needed.
             final_status = StatusCode.SUCCESS
-        # Otherwise, keep the default ERROR status
+# Otherwise, keep the default ERROR status
 
     # --- Final Status Message (Printed to standard console) ---
     # Print a final summary message based on the determined final_status
