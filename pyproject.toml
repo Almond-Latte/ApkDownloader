@@ -11,12 +11,45 @@ dependencies = [
     "typer>=0.15.2",
 ]
 
-[pytright]
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pyright",
+]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+line-length = 120
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+indent-style = "space"
+indent-width = 4
+
+
+[tool.pyright]
 include = [
     "src",
     "tests",
 ]
 exclude = [
-
+    "**/__pycache__",
 ]
-typeChekingMode = "standard"
+typeCheckingMode = "strict"
+
+reportUnnecessaryIsInstance = true
+reportUnnecessaryCast = true
+reportUnnecessaryComparison = true
+reportUnnecessaryContains = true
+reportAssertAlwaysTrue = true
+reportMatchNotExhaustive = true
+reportImplicitOverride = true
+reportMissingSuperCall = true
+reportUnusedCoroutine = true
