@@ -47,67 +47,82 @@ app = typer.Typer(
 # --- ApkDownloader Class ---
 class ApkDownloader:
     """Handles the process of collecting APK hashes and downloading APK files."""
-    HIDE_COMPLETED_TASK_DELAY = 5.0  # タスク完了後に非表示にするまでの秒数
-    FILENAME_DISPLAY_MAX_LEN = 8     # ファイル名表示の最大長（SHA部分）
+    HIDE_COMPLETED_TASK_DELAY = 5.0  # Seconds to hide task after completion
+    FILENAME_DISPLAY_MAX_LEN = 8     # Max length of SHA part for filename display
 
     def __init__(
         self,
         console: Console,
-        url: str,
-        api_key: str,
-        apk_list_path: Path, # Expected to be a Feather file path
-        malware_threshold: int,
-        n_malware: int,
-        n_cleanware: int,
-        date_start: datetime,
-        date_end: datetime,
-        concurrent_downloads: int,
-        log_file_path: Path,
-        logger_config_path: Path,
-        download_dir: Path,
-        cache_dir: Path,
+        url: str, # No longer Optional if always provided and validated
+        api_key: str, # No longer Optional
+        apk_list_path: Path, # No longer Optional
+        malware_threshold: int, # No longer Optional
+        n_malware: int, # No longer Optional
+        n_cleanware: int, # No longer Optional
+        date_start: datetime, # No longer Optional
+        date_end: datetime, # No longer Optional
+        concurrent_downloads: int, # No longer Optional
+        log_file_path: Path, # Already Path
+        logger_config_path: Path, # Already Path
+        download_dir: Path, # No longer Optional
+        cache_dir: Path, # No longer Optional
+        random_seed: Optional[int] = None, # Add random_seed parameter
+        verify_existing_file_hash: bool = True, # Add verify_existing_file_hash parameter
     ) -> None:
         """Initializes the ApkDownloader with necessary configurations."""
+        super().__init__()
         self.console = console
-        self.init_success = True
-        
+        self.init_success = True # This flag will indicate if all setup steps in _run_initialization_sequence succeeded
+
         self.progress_manager = ProgressManager(
             status_change_callback=self._on_status_change
         )
         
-        self.logger: Optional[Logger] = None
-        self.live: Optional[Live] = None
-        self.event: Optional[Event] = Event() # Initialize event here
-        self.download_progress: Optional[Progress] = None
+        self.logger: Optional[Logger] = None # Logger is set up during initialization
+        self.live: Optional[Live] = None # Live display is set up during initialization
+        self.event: Event = Event() # Initialized directly, so not Optional
+        self.download_progress: Optional[Progress] = None # Progress display is set up during initialization
         
-        # Config attributes will be set by _read_and_validate_config
-        # Initialize them to None or default values if appropriate before validation
-        self.url: Optional[str] = None
-        self.api_key: Optional[str] = None
-        self.apk_list_path: Optional[Path] = None
-        self.malware_threshold: Optional[int] = None
-        self.n_malware: Optional[int] = None
-        self.n_cleanware: Optional[int] = None
-        self.date_start: Optional[datetime] = None
-        self.date_end: Optional[datetime] = None
-        self.concurrent_downloads: Optional[int] = None
-        self.log_file_path: Optional[Path] = log_file_path # Initialize directly
-        self.logger_config_path: Optional[Path] = logger_config_path # Initialize directly
-        self.download_dir: Optional[Path] = None
-        self.cache_dir: Optional[Path] = None
-        self.cache_handler: Optional[CacheHandler] = None # Initialize cache_handler
+        # These attributes are now assigned directly from __init__ arguments.
+        # Their types are non-Optional as they are expected to be valid if __init__ is called correctly.
+        # Validation will occur in _read_and_validate_config.
+        self.url: str = url 
+        self.api_key: str = api_key
+        self.apk_list_path: Path = apk_list_path
+        self.malware_threshold: int = malware_threshold
+        self.n_malware: int = n_malware
+        self.n_cleanware: int = n_cleanware
+        self.date_start: datetime = date_start 
+        self.date_end: datetime = date_end
+        self.concurrent_downloads: int = concurrent_downloads
+        self.log_file_path: Path = log_file_path
+        self.logger_config_path: Path = logger_config_path
+        self.download_dir: Path = download_dir
+        self.cache_dir: Path = cache_dir
+        self.random_seed: Optional[int] = random_seed # Store the random seed
+        self.verify_existing_file_hash: bool = verify_existing_file_hash # Store the hash verification setting
         
-        # Run initialization sequence
-        self._run_initialization_sequence(url, api_key, apk_list_path, malware_threshold, n_malware, n_cleanware, date_start, date_end, concurrent_downloads, log_file_path, logger_config_path, download_dir, cache_dir)
+        self.cache_handler: Optional[CacheHandler] = None # CacheHandler is initialized later
+        self.cleanware_cache_file: Optional[Path] = None # Generated by gen_cache_filenames
+        self.malware_cache_file: Optional[Path] = None # Generated by gen_cache_filenames
         
-        self.gen_cache_filenames() # Generate cache filenames after config is validated
+        # Run initialization sequence.
+        # This sequence will attempt to set up logger, directories, etc.,
+        # and will use the attributes already assigned above.
+        # It will also call _read_and_validate_config.
+        self._run_initialization_sequence()
+        
+        # Generate cache filenames only if core config is valid and basic init succeeded.
+        if self.init_success:
+            self.gen_cache_filenames() # This method internally checks if necessary attributes are set.
 
-        # Instantiate CacheHandler after logger is set up and config is validated
-        if self.init_success and self.logger and self.cache_handler is None: # Ensure cache_handler is not already set
-            if all([self.cache_dir, self.malware_threshold is not None, self.n_cleanware is not None, self.n_malware is not None, self.date_start, self.date_end]):
+            # Instantiate CacheHandler after logger is set up and config is validated.
+            if self.logger and self.cache_handler is None:
+                # All dependent config attributes (cache_dir, malware_threshold, etc.)
+                # are now non-Optional instance members.
                 self.cache_handler = CacheHandler(
                     console=self.console,
-                    logger=self.logger,
+                    logger=self.logger, # Logger must be successfully initialized
                     cache_dir=self.cache_dir,
                     malware_threshold=self.malware_threshold,
                     n_cleanware=self.n_cleanware,
@@ -115,69 +130,53 @@ class ApkDownloader:
                     date_start=self.date_start,
                     date_end=self.date_end,
                 )
-            else:
-                if self.logger:
-                    self.logger.error("CacheHandler could not be initialized due to missing configuration.")
-                self.console.print("[bold red]Error: CacheHandler initialization failed due to missing config.[/bold red]")
-                self.init_success = False # Indicate initialization failure
-        elif not self.init_success and self.logger:
-             self.logger.warning("Skipping CacheHandler initialization due to previous errors.")
-
+            elif not self.logger and self.init_success: 
+                 # This case implies init_success was true but logger somehow failed to set,
+                 # which should be caught by _run_initialization_sequence setting init_success to False.
+                 self.console.print("[bold red]Error: Logger not initialized, cannot set up CacheHandler.[/bold red]")
+                 self.init_success = False 
+            elif not self.init_success and self.logger: 
+                 self.logger.warning("Skipping CacheHandler initialization due to previous errors.")
+            # If self.logger is None and init_success is False, it's already handled by the above.
 
     def _on_status_change(self, task_code: TaskCode, status: StatusCode) -> None:
         """Handle status changes from progress manager."""
         self._refresh_live_display()
 
-    def _read_and_validate_config(
-        self,
-        url: str,
-        api_key: str,
-        apk_list_path: Path,
-        malware_threshold: int,
-        n_malware: int,
-        n_cleanware: int,
-        date_start: datetime,
-        date_end: datetime,
-        concurrent_downloads: int,
-        log_file_path: Path, # Already set in __init__
-        logger_config_path: Path, # Already set in __init__
-        download_dir: Path,
-        cache_dir: Path,
-    ) -> None:
-        """Reads and validates the configuration parameters."""
-        # Basic validation (can be expanded)
-        if not url or not api_key:
+    def _read_and_validate_config(self) -> None:
+        """
+        Validates the configuration parameters already set as instance attributes.
+        This method is now called without arguments as attributes are pre-assigned in __init__.
+        """
+        # Basic validation for non-Optional attributes
+        if not self.url or not self.api_key:
             raise ValueError("URL and API_KEY must be provided.")
-        if not apk_list_path.exists():
-            raise FileNotFoundError(f"APK list file not found: {apk_list_path}")
-        if n_malware < 0 or n_cleanware < 0:
+        if not self.apk_list_path.exists():
+            raise FileNotFoundError(f"APK list file not found: {self.apk_list_path}")
+        if self.n_malware < 0 or self.n_cleanware < 0:
             raise ValueError("Number of malware/cleanware samples cannot be negative.")
-        if date_start >= date_end:
+        if self.date_start >= self.date_end:
             raise ValueError("Start date must be before end date.")
+        if self.concurrent_downloads <= 0:
+             raise ValueError("Concurrent downloads must be a positive integer.")
+        if not self.download_dir: # Path objects are True if not empty, but check for robustness
+            raise ValueError("Download directory must be specified.")
+        if not self.cache_dir:
+            raise ValueError("Cache directory must be specified.")
 
-        # Set instance attributes
-        self.url = url
-        self.api_key = api_key
-        self.apk_list_path = apk_list_path
-        self.malware_threshold = malware_threshold
-        self.n_malware = n_malware
-        self.n_cleanware = n_cleanware
-        self.date_start = date_start.replace(tzinfo=timezone.utc) if date_start.tzinfo is None else date_start
-        self.date_end = date_end.replace(tzinfo=timezone.utc) if date_end.tzinfo is None else date_end
-        self.concurrent_downloads = concurrent_downloads
-        # self.log_file_path and self.logger_config_path are already set in __init__
-        self.download_dir = download_dir
-        self.cache_dir = cache_dir
-
-        # Log successful configuration
-        if self.logger: # Check if logger is initialized
-            self.logger.info("Configuration loaded and validated successfully.")
-        else: # Fallback if logger is not yet available (should not happen if called after logger setup)
-            self.console.print("[yellow]Configuration loaded (logger not yet available for detailed logging).[/yellow]")
-    
-    def _run_initialization_sequence(self, url: str, api_key: str, apk_list_path: Path, malware_threshold: int, n_malware: int, n_cleanware: int, date_start: datetime, date_end: datetime, concurrent_downloads: int, log_file_path: Path, logger_config_path: Path, download_dir: Path, cache_dir: Path) -> None:
-        """Run the initialization sequence using progress manager."""
+        # Ensure dates are timezone-aware (UTC)
+        self.date_start = self.date_start.replace(tzinfo=timezone.utc) if self.date_start.tzinfo is None else self.date_start
+        self.date_end = self.date_end.replace(tzinfo=timezone.utc) if self.date_end.tzinfo is None else self.date_end
         
+        # Logging of successful configuration is now handled in _run_initialization_sequence
+        # after the logger itself is confirmed to be set up.
+    
+    def _run_initialization_sequence(self) -> None:
+        """
+        Run the initialization sequence using progress manager.
+        Uses instance attributes for configuration.
+        """
+        # Setup Progress Display first as other steps might log to console via progress manager
         if self.progress_manager.start_task(TaskCode.SETUP_PROGRESS):
             try:
                 self._setup_progress_display()
@@ -186,59 +185,61 @@ class ApkDownloader:
                 self.progress_manager.complete_task(TaskCode.SETUP_PROGRESS, StatusCode.ERROR, error=e)
                 self.init_success = False
                 self.console.print(f"[bold red]Critical error during setup progress display: {e}[/bold red]")
-                return
-        
-        # Read Configuration (sets self attributes like self.URL, self.API_KEY etc.)
+                return # Stop initialization if progress display fails
+
+        # Validate Configuration (uses self attributes)
         if self.progress_manager.start_task(TaskCode.READ_CONFIG):
             try:
-                # This method should set the instance attributes based on parameters
-                self._read_and_validate_config(url, api_key, apk_list_path, malware_threshold, n_malware, n_cleanware, date_start, date_end, concurrent_downloads, log_file_path, logger_config_path, download_dir, cache_dir)
+                self._read_and_validate_config() # Validates pre-assigned self attributes
                 self.progress_manager.complete_task(TaskCode.READ_CONFIG, StatusCode.SUCCESS)
-            except Exception as e:
+            except (ValueError, FileNotFoundError) as e: # Catch specific validation errors
                 self.progress_manager.complete_task(TaskCode.READ_CONFIG, StatusCode.ERROR, error=e)
                 self.init_success = False
-                self.console.print(f"[bold red]Critical error during config reading: {e}[/bold red]")
-                return
-        
+                self.console.print(f"[bold red]Configuration error: {e}[/bold red]")
+                return # Stop initialization if config is invalid
+
+        # Setup Signal Handlers
         if self.progress_manager.start_task(TaskCode.SETUP_SIGNALS):
             try:
                 self._setup_signal_handler()
                 self.progress_manager.complete_task(TaskCode.SETUP_SIGNALS, StatusCode.SUCCESS)
-            except Exception as e:
+            except Exception as e: 
                 self.progress_manager.complete_task(TaskCode.SETUP_SIGNALS, StatusCode.ERROR, error=e)
                 self.init_success = False
                 self.console.print(f"[bold red]Critical error during signal handler setup: {e}[/bold red]")
                 return
-        
+
+        # Setup Logger
         if self.progress_manager.start_task(TaskCode.SETUP_LOGGER):
             try:
                 self.logger = self._setup_logger()
-                # Now that logger is set up, log config if it wasn't logged before
-                if self.logger and self.url: # Check if config was loaded
-                     self.logger.info("Configuration loaded and validated successfully (logged after logger setup).")
+                # Now that logger is set up, log config validation success
+                self.logger.info("Configuration loaded and validated successfully (logged after logger setup).")
                 self.progress_manager.complete_task(TaskCode.SETUP_LOGGER, StatusCode.SUCCESS)
             except Exception as e:
                 self.progress_manager.complete_task(TaskCode.SETUP_LOGGER, StatusCode.ERROR, error=e)
                 self.init_success = False
                 self.console.print(f"[bold red]Critical error during logger setup: {e}[/bold red]")
+                if self.logger: 
+                    self.logger.critical(f"Logger setup failed: {e}", exc_info=True)
                 return
-        
+
+        # Make Download Directories
         if self.progress_manager.start_task(TaskCode.MAKE_DIRS):
             try:
-                self._make_download_dirs()
+                self._make_download_dirs() # Uses self.download_dir
                 self.progress_manager.complete_task(TaskCode.MAKE_DIRS, StatusCode.SUCCESS)
-            except Exception as e:
+            except (ValueError, OSError) as e: 
                 self.progress_manager.complete_task(TaskCode.MAKE_DIRS, StatusCode.ERROR, error=e)
                 self.init_success = False
-                self.console.print(f"[bold red]Critical error during directory creation: {e}[/bold red]")
+                if self.logger: # Logger should be available here
+                    self.logger.error(f"Failed to create download directories: {e}", exc_info=True)
+                else: # Fallback if logger somehow isn't set despite previous step
+                    self.console.print(f"[bold red]Error creating download directories (logger not available): {e}[/bold red]")
                 return
     
     def _setup_signal_handler(self) -> None:
         """Sets up signal handlers for graceful termination (SIGINT, SIGTERM)."""
-        # Ensure self.event is initialized
-        if self.event is None: # Should already be initialized in __init__
-            self.event = Event()
-            
         # Register the signal handler for SIGINT (Ctrl+C) and SIGTERM
         signal.signal(signal.SIGINT, self.handle_sigint)
         signal.signal(signal.SIGTERM, self.handle_sigint)
@@ -271,7 +272,7 @@ class ApkDownloader:
                 # Ensure the log file path is correctly set in the handler
                 # This assumes a standard Python logging config structure
                 if 'handlers' in log_config_data:
-                    for handler_name, handler_config in log_config_data['handlers'].items():
+                    for _, handler_config in log_config_data['handlers'].items():
                         if 'filename' in handler_config: # Check if the handler has a filename attribute
                             # Update the filename to use the path from settings/CLI
                             handler_config['filename'] = str(self.log_file_path) 
@@ -400,7 +401,7 @@ class ApkDownloader:
                 renderables.append(download_panel_obj)
             else:
                 # Fallback message if download progress object doesn't exist
-                renderables.append("[bold red]Download progress not available.[/bold red]")
+                renderables.append(Panel("[bold red]Download progress not available.[/bold red]", title="Download Progress", border_style="red", padding=(1,1)))
 
         # Add the renderables as a row in the grid
         if renderables:
@@ -423,20 +424,34 @@ class ApkDownloader:
         if event:
             event.set()
 
-    def _make_download_dirs(self) -> bool:
-        """Creates the necessary download subdirectories ('cleanware', 'malware')."""
+    def _make_download_dirs(self) -> None:
+        """Creates the necessary download subdirectories ('cleanware', 'malware').
+        Raises ValueError if download_dir is not set, or OSError on directory creation failure.
+        """
         logger = getattr(self, 'logger', None)
+
+        if self.download_dir is None:
+            err_msg = "Download directory (self.download_dir) is not configured. Cannot create subdirectories."
+            if logger:
+                logger.critical(err_msg)
+            self.console.log(f"[bold red]Internal Error:[/bold red] {err_msg}")
+            raise ValueError(err_msg)
+
         try:
             # Create directories, including parents, if they don't exist
-            (self.download_dir / "cleanware").mkdir(parents=True, exist_ok=True)
-            (self.download_dir / "malware").mkdir(parents=True, exist_ok=True)
-            if logger: logger.info(f"Ensured download directories exist under: {self.download_dir}")
-            return True
+            cleanware_dir = self.download_dir / "cleanware"
+            malware_dir = self.download_dir / "malware"
+            
+            cleanware_dir.mkdir(parents=True, exist_ok=True)
+            malware_dir.mkdir(parents=True, exist_ok=True)
+            
+            if logger: logger.info(f"Ensured download directories exist: {cleanware_dir}, {malware_dir}")
         except OSError as e:
             # Log and report error if directory creation fails
-            if logger: logger.error(f"Failed to create download directories: {e}")
+            err_msg = f"Failed to create download directories under {self.download_dir}: {e}"
+            if logger: logger.error(err_msg)
             self.console.log(f"[bold red]Error creating download directories:[/bold red] {e}")
-            return False
+            raise # Re-raise OSError to be caught by the caller
 
     # Note: has_vt_detection, is_malware, is_within_date_range are kept for potential
     # compatibility or future use with non-Polars workflows, but are not the primary
@@ -459,6 +474,10 @@ class ApkDownloader:
             vt_detection = -1 # Default if conversion fails or value is None/empty
             if vt_detection_str is not None and vt_detection_str != '':
                  vt_detection = int(vt_detection_str)
+            
+            if self.malware_threshold is None:
+                if logger: logger.warning(f"Malware threshold is not configured. Cannot determine if {json_data.get('sha256', 'Unknown')} is malware. Treating as cleanware.")
+                return False
             return vt_detection >= self.malware_threshold
         except (ValueError, TypeError):
             # Log warning if vt_detection is invalid, treat as cleanware
@@ -481,26 +500,55 @@ class ApkDownloader:
             vt_scan_date = datetime.strptime(scan_date_str, "%Y-%m-%d %H:%M:%S")
             vt_scan_date = vt_scan_date.replace(tzinfo=timezone.utc) # Assume UTC
             # Check if the date falls within the configured range
-            return self.date_start <= vt_scan_date <= self.date_end
+            if self.date_start is not None and self.date_end is not None:
+                return self.date_start <= vt_scan_date <= self.date_end
+            else:
+                if logger: logger.warning(f"Date range not configured. Skipping date filter for {json_data.get('sha256', 'Unknown')}.")
+                return False # Or True, depending on desired behavior when range is not set
         except (ValueError, TypeError):
             # Log warning if date format is invalid
             if logger: logger.warning(f"Invalid date format '{scan_date_str}' for {json_data.get('sha256', 'Unknown')}. Skipping date filter.")
-            return False
-
     def gen_cache_filenames(self) -> None:
         """Generates filenames for cache files based on current parameters."""
         logger = getattr(self, 'logger', None)
+
+        # Ensure all necessary configuration attributes are available before proceeding.
+        # These attributes are typically set during _read_and_validate_config.
+        # If any are None, it indicates an incomplete or failed configuration.
+        if not all([
+            self.cache_dir is not None,
+            self.malware_threshold is not None,
+            self.n_cleanware is not None,
+            self.n_malware is not None,
+            self.date_start is not None,
+            self.date_end is not None,
+        ]):
+            if logger:
+                logger.warning(
+                    "Cannot generate cache filenames due to missing essential configuration "
+                    "(cache_dir, malware_threshold, n_cleanware, n_malware, date_start, or date_end). "
+                    "Cache functionality will be impaired."
+                )
+            # self.cleanware_cache_file and self.malware_cache_file remain None (as initialized in __init__)
+            return
+
         # Create a unique sub-directory name based on filtering/sampling parameters
+        # At this point, checked attributes are guaranteed to be non-None.
         info_chain: list[str] = [
             str(self.malware_threshold), str(self.n_cleanware), str(self.n_malware),
             f"{self.date_start:%Y%m%d}", f"{self.date_end:%Y%m%d}",
         ]
         cache_sub_dir_name: str = "_".join(info_chain)
+        
+        # self.cache_dir is now known to be a Path object due to the check above.
         cache_sub_dir: Path = self.cache_dir / cache_sub_dir_name
+        
         # Define the full paths for cleanware and malware cache files
-        self.cleanware_cache_file: Path = cache_sub_dir / "cleanware_samples.jsonl"
-        self.malware_cache_file: Path = cache_sub_dir / "malware_samples.jsonl"
-        if logger: logger.info(f"Cache directory set to: {cache_sub_dir}")
+        self.cleanware_cache_file = cache_sub_dir / "cleanware_samples.jsonl"
+        self.malware_cache_file = cache_sub_dir / "malware_samples.jsonl"
+        if logger: 
+            logger.info(f"Cache filenames generated. Cleanware cache: {self.cleanware_cache_file}, Malware cache: {self.malware_cache_file}")
+            logger.info(f"Cache sub-directory: {cache_sub_dir}")
 
     def make_cache_file(self, cleanware_samples: List[Json], malware_samples: List[Json]) -> bool:
         """Saves the selected samples (lists of dictionaries) to cache files (JSON Lines format)."""
@@ -606,6 +654,11 @@ class ApkDownloader:
         
         logger = getattr(self, 'logger', None)
         event = getattr(self, 'event', None)
+
+        # Set the random seed for reproducibility if provided
+        if self.random_seed is not None:
+            random.seed(self.random_seed)
+            if logger: logger.info(f"Using random seed: {self.random_seed} for hash collection.")
         
         try:
             # --- Cache Check ---
@@ -625,13 +678,6 @@ class ApkDownloader:
             # --- Polars Processing ---
             sampled_cleanware: list[Json] = []
             sampled_malware: list[Json] = []
-
-            # Check if Polars library is available
-            if not POLARS_AVAILABLE:
-                 self.console.log("[bold red]Error: 'polars' library is not installed. Cannot process Feather file.[/bold red]")
-                 self.progress_manager.complete_task(TaskCode.COLLECT_HASHES, StatusCode.ERROR)
-                 self._refresh_live_display()
-                 return [], [] # Return empty lists on error
 
             feather_file_path = self.apk_list_path
             if not feather_file_path.exists():
@@ -852,38 +898,53 @@ class ApkDownloader:
         if event and event.is_set():
             if logger: logger.info(f"Download cancelled for {expected_sha256[:12]}... due to termination signal.")
             if download_progress:
-                download_progress.update(task_id, visible=False, status_text="[yellow]Cancelled[/yellow]") 
+                # Set completion_time for interrupted tasks as well for auto-hide
+                download_progress.update(task_id, visible=True, status_text="[yellow]Cancelled[/yellow]", completion_time=time.time()) 
             return False
 
         download_file_path = download_dir / filename 
 
         if download_file_path.exists():
-            if logger:
-                logger.info(f"File {filename.name} already exists. Verifying hash...")
-            if download_progress:
-                download_progress.update(task_id, status_text="[cyan]Verifying existing...[/cyan]") 
+            if self.verify_existing_file_hash: # Check if hash verification is enabled
+                if logger:
+                    logger.info(f"File {filename.name} already exists. Verifying hash...")
+                if download_progress:
+                    download_progress.update(task_id, status_text="[cyan]Verifying existing...[/cyan]") 
 
-            calculated_sha256 = calculate_sha256(download_file_path)
-            if calculated_sha256 == expected_sha256:
-                if logger: logger.info(f"Hash match for existing file {filename.name}. Skipping download.")
+                calculated_sha256 = calculate_sha256(download_file_path)
+                if calculated_sha256 == expected_sha256:
+                    if logger: logger.info(f"Hash match for existing file {filename.name}. Skipping download.")
+                    if download_progress:
+                        file_size = download_file_path.stat().st_size
+                        download_progress.update(
+                            task_id,
+                            completed=file_size,
+                            total=file_size,
+                            status_text="[green]Exists & Verified[/green]", 
+                            completion_time=time.time() # Record completion time
+                        )
+                    return True
+                else:
+                    if logger: logger.warning(f"Hash mismatch for existing file {filename.name} (Expected: {expected_sha256}, Got: {calculated_sha256}). Will attempt re-download.")
+                    if download_progress:
+                        download_progress.update(task_id, status_text="[yellow]Existing file hash mismatch. Re-downloading...[/yellow]") 
+                    try:
+                        download_file_path.unlink()
+                    except OSError as e:
+                        if logger: logger.error(f"Could not delete mismatched existing file {download_file_path}: {e}")
+            else: # Hash verification is disabled
+                if logger:
+                    logger.info(f"File {filename.name} already exists. Skipping download as hash verification is disabled.")
                 if download_progress:
                     file_size = download_file_path.stat().st_size
                     download_progress.update(
                         task_id,
                         completed=file_size,
                         total=file_size,
-                        status_text="[green]Exists & Verified[/green]", 
+                        status_text="[green]Exists (No Verify)[/green]",
                         completion_time=time.time() # Record completion time
                     )
-                return True
-            else:
-                if logger: logger.warning(f"Hash mismatch for existing file {filename.name} (Expected: {expected_sha256}, Got: {calculated_sha256}). Will attempt re-download.")
-                if download_progress:
-                    download_progress.update(task_id, status_text="[yellow]Existing file hash mismatch. Re-downloading...[/yellow]") 
-                try:
-                    download_file_path.unlink()
-                except OSError as e:
-                    if logger: logger.error(f"Could not delete mismatched existing file {download_file_path}: {e}")
+                return True # Skip download if file exists and verification is off
 
         if logger: logger.info(f"Attempting download: {expected_sha256} to {download_file_path}")
         if download_progress:
@@ -894,7 +955,7 @@ class ApkDownloader:
         response = None
         file_handle = None
         bytes_downloaded = 0
-        calculated_sha256 = ""
+        # calculated_sha256 = "" # This variable is defined later, no need to pre-define here
 
         try:
             response = requests.get(self.url, params=params, stream=True, timeout=(10, 60))
@@ -926,7 +987,7 @@ class ApkDownloader:
                 if event and event.is_set():
                     if logger: logger.info(f"Task {task_id}: Download of {expected_sha256} interrupted by event.")
                     if download_progress:
-                        download_progress.update(task_id, status_text="[yellow]Interrupted[/yellow]")
+                        download_progress.update(task_id, status_text="[yellow]Interrupted[/yellow]", completion_time=time.time())
                     success = False
                     break
                 if chunk:  # filter out keep-alive new chunks
@@ -974,38 +1035,36 @@ class ApkDownloader:
                 else:
                     if logger: logger.error(f"Hash mismatch for {expected_sha256}. Expected: {expected_sha256}, Got: {calculated_sha256}")
                     if download_progress:
-                        download_progress.update(task_id, status_text="[red]Hash Mismatch![/red]") 
-                        # Optionally, set completion_time for auto-hide on error as well
-                        # download_progress.update(task_id, status_text="[red]Hash Mismatch![/red]", completion_time=time.time())
+                        download_progress.update(task_id, status_text="[red]Hash Mismatch![/red]", completion_time=time.time())
                     success = False
             elif not (event and event.is_set()): # If download loop didn't set success and not interrupted
                  if logger: logger.error(f"Download failed for {expected_sha256} before hash verification stage.")
                  if download_progress:
-                     download_progress.update(task_id, status_text="[red]Download Failed[/red]") 
+                     download_progress.update(task_id, status_text="[red]Download Failed[/red]", completion_time=time.time()) 
 
         except requests.exceptions.Timeout as e:
             if logger:
                 logger.error(f"Timeout during download of {expected_sha256}: {e}")
             self.console.log(f"[bold red]Timeout ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Timeout[/red]") 
+            if download_progress: download_progress.update(task_id, status_text="[red]Timeout[/red]", completion_time=time.time()) 
             success = False
         except requests.exceptions.RequestException as e:
             if logger:
                 logger.error(f"RequestException during download of {expected_sha256}: {e}")
             self.console.log(f"[bold red]Download Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Request Error[/red]") 
+            if download_progress: download_progress.update(task_id, status_text="[red]Request Error[/red]", completion_time=time.time()) 
             success = False
         except IOError as e:
             if logger:
                 logger.error(f"IOError during download of {expected_sha256}: {e}")
             self.console.log(f"[bold red]File Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]File Error[/red]") 
+            if download_progress: download_progress.update(task_id, status_text="[red]File Error[/red]", completion_time=time.time()) 
             success = False
         except Exception as e:
             if logger:
                 logger.exception(f"Unexpected error during download of {expected_sha256}: {e}")
             self.console.log(f"[bold red]Unexpected Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Unexpected Error[/red]") 
+            if download_progress: download_progress.update(task_id, status_text="[red]Unexpected Error[/red]", completion_time=time.time()) 
             success = False
         finally:
             # Status text should be set by specific conditions above.
@@ -1217,6 +1276,8 @@ def main(
     date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold for malware candidates (0-100)"),
+    random_seed: Optional[int] = typer.Option(settings.RANDOM_SEED, help="Seed for random number generation to ensure reproducibility. If None, seed is not fixed."), # Add random_seed option
+    verify_hash: bool = typer.Option(settings.VERIFY_EXISTING_FILE_HASH, help="Verify hash of existing files. If False, existing files are skipped without verification."),
 ):
     """Main entry point for the APK Downloader application."""
 
@@ -1255,6 +1316,11 @@ def main(
     data_start: datetime = datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     data_end: datetime = datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
+    # Generate log file name with current timestamp
+    current_time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"apk_downloader_{current_time_str}.log"
+    dynamic_log_file_path = settings.LOG_DIR / log_filename
+
     downloader = ApkDownloader(
         console=console,
         url=settings.URL,
@@ -1266,10 +1332,12 @@ def main(
         date_start=data_start,
         date_end=data_end,
         concurrent_downloads=settings.CONCURRENT_DOWNLOADS,
-        log_file_path=settings.LOG_DIR / "apk_downloader.log",
+        log_file_path=dynamic_log_file_path, # Use dynamically generated log file path
         logger_config_path=settings.LOGGER_CONFIG_PATH,
         download_dir=download_dir,
         cache_dir=settings.CACHE_DIR,
+        random_seed=random_seed, # Pass the random_seed
+        verify_existing_file_hash=verify_hash, # Pass the hash verification setting
     )
 
     # Start the hash collection process

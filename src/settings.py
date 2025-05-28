@@ -51,20 +51,26 @@ APK_LIST_PATH: Path = Path(load_env("APK_LIST_PATH", None))
 
 # --- Default API and Data Settings ---
 URL: str = load_env("URL", "https://androzoo.uni.lu/api/download")
-MALWARE_THRESHOLD: int = load_env("MALWARE_THRESHOLD", 5)
-N_MALWARE: int = load_env("N_MALWARE", 10)
-N_CLEANWARE: int = load_env("N_CLEANWARE", 10)
+MALWARE_THRESHOLD: int = load_env("MALWARE_THRESHOLD", 4)
+N_MALWARE: int = load_env("N_MALWARE", 60000)
+N_CLEANWARE: int = load_env("N_CLEANWARE", 120000)
 
 # --- Default Date Range Settings (as strings) ---
 # Start date (e.g., beginning of last year)
-DATE_START_STR: str = load_env("DATE_START_STR", "2023-01-01 00:00:00")
+DATE_START_STR: str = load_env("DATE_START_STR", "2022-04-01 00:00:00")
 DATE_START: datetime = datetime.strptime(DATE_START_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 # End date (e.g., today's date at the beginning of the day, UTC)
 # Use timezone.utc for consistency
-DATE_END_STR: str = load_env("DATE_END_STR", datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00"))
+DATE_END_STR: str = load_env("DATE_END_STR", "2024-04-01 00:00:00")
 DATE_END: datetime = datetime.strptime(DATE_END_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 # --- Default Performance Settings ---
 CONCURRENT_DOWNLOADS: int = load_env("CONCURRENT_DOWNLOADS", 12)
+
+# --- Reproducibility ---
+RANDOM_SEED: int = load_env("RANDOM_SEED", 42) # Allows for a fixed seed for reproducibility, None means no fixed seed
+
+# --- Download Options ---
+VERIFY_EXISTING_FILE_HASH: bool = load_env("VERIFY_EXISTING_FILE_HASH", False) # Whether to verify hash of existing files
 
 # No active code here, just constants/defaults.
