@@ -1,17 +1,18 @@
-import json # Added to top-level imports
-import logging # Added to top-level imports
-import os # Added to top-level imports
-import random # Import random module for sampling
-import signal # Added to top-level imports
-import time # Added to top-level imports
+import json
+import logging
+import os
+import random
+import signal
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone # Import timezone for UTC handling
+from datetime import datetime, timezone
 from logging import Logger, config, getLogger
 from pathlib import Path
 from threading import Event
 from types import FrameType
 from typing import Any, Dict, List, Optional, Tuple
 
+import polars as pl
 import requests
 import typer
 from rich import box
@@ -19,7 +20,6 @@ from rich.align import Align
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.spinner import Spinner
 from rich.progress import (
     BarColumn,
     Progress,
@@ -29,14 +29,13 @@ from rich.progress import (
     TimeElapsedColumn,
     TransferSpeedColumn,
 )
+from rich.spinner import Spinner
 from rich.table import Table
 
-import settings # Ensure settings is imported
-from utils import Json, make_json_serializable, convert_csv_to_feather, calculate_sha256 # Add calculate_sha256
-from cache_handler import CacheHandler # Ensure cache_handler is imported
-from progress_manager import ProgressManager, TaskCode, StatusCode # Ensure progress_manager is imported
-
-import polars as pl
+import settings
+from cache_handler import CacheHandler
+from progress_manager import ProgressManager, StatusCode, TaskCode
+from utils import Json, calculate_sha256, convert_csv_to_feather, make_json_serializable
 
 # Create a Typer app instance for the command-line interface
 app = typer.Typer(
@@ -53,39 +52,36 @@ class ApkDownloader:
     def __init__(
         self,
         console: Console,
-        url: str, # No longer Optional if always provided and validated
-        api_key: str, # No longer Optional
-        apk_list_path: Path, # No longer Optional
-        malware_threshold: int, # No longer Optional
-        n_malware: int, # No longer Optional
-        n_cleanware: int, # No longer Optional
-        date_start: datetime, # No longer Optional
-        date_end: datetime, # No longer Optional
-        concurrent_downloads: int, # No longer Optional
-        log_file_path: Path, # Already Path
-        logger_config_path: Path, # Already Path
-        download_dir: Path, # No longer Optional
-        cache_dir: Path, # No longer Optional
-        random_seed: Optional[int] = None, # Add random_seed parameter
-        verify_existing_file_hash: bool = True, # Add verify_existing_file_hash parameter
+        url: str,
+        api_key: str,
+        apk_list_path: Path,
+        malware_threshold: int,
+        n_malware: int,
+        n_cleanware: int,
+        date_start: datetime,
+        date_end: datetime,
+        concurrent_downloads: int,
+        log_file_path: Path,
+        logger_config_path: Path,
+        download_dir: Path,
+        cache_dir: Path,
+        random_seed: Optional[int] = None,
+        verify_existing_file_hash: bool = True,
     ) -> None:
         """Initializes the ApkDownloader with necessary configurations."""
         super().__init__()
         self.console = console
-        self.init_success = True # This flag will indicate if all setup steps in _run_initialization_sequence succeeded
+        self.init_success = True
 
         self.progress_manager = ProgressManager(
             status_change_callback=self._on_status_change
         )
         
-        self.logger: Optional[Logger] = None # Logger is set up during initialization
-        self.live: Optional[Live] = None # Live display is set up during initialization
-        self.event: Event = Event() # Initialized directly, so not Optional
-        self.download_progress: Optional[Progress] = None # Progress display is set up during initialization
+        self.logger: Optional[Logger] = None
+        self.live: Optional[Live] = None
+        self.event: Event = Event()
+        self.download_progress: Optional[Progress] = None
         
-        # These attributes are now assigned directly from __init__ arguments.
-        # Their types are non-Optional as they are expected to be valid if __init__ is called correctly.
-        # Validation will occur in _read_and_validate_config.
         self.url: str = url 
         self.api_key: str = api_key
         self.apk_list_path: Path = apk_list_path
@@ -99,22 +95,17 @@ class ApkDownloader:
         self.logger_config_path: Path = logger_config_path
         self.download_dir: Path = download_dir
         self.cache_dir: Path = cache_dir
-        self.random_seed: Optional[int] = random_seed # Store the random seed
-        self.verify_existing_file_hash: bool = verify_existing_file_hash # Store the hash verification setting
+        self.random_seed: Optional[int] = random_seed
+        self.verify_existing_file_hash: bool = verify_existing_file_hash
         
-        self.cache_handler: Optional[CacheHandler] = None # CacheHandler is initialized later
-        self.cleanware_cache_file: Optional[Path] = None # Generated by gen_cache_filenames
-        self.malware_cache_file: Optional[Path] = None # Generated by gen_cache_filenames
+        self.cache_handler: Optional[CacheHandler] = None
+        self.cleanware_cache_file: Optional[Path] = None
+        self.malware_cache_file: Optional[Path] = None
         
-        # Run initialization sequence.
-        # This sequence will attempt to set up logger, directories, etc.,
-        # and will use the attributes already assigned above.
-        # It will also call _read_and_validate_config.
         self._run_initialization_sequence()
-        
-        # Generate cache filenames only if core config is valid and basic init succeeded.
+
         if self.init_success:
-            self.gen_cache_filenames() # This method internally checks if necessary attributes are set.
+            self.gen_cache_filenames()
 
             # Instantiate CacheHandler after logger is set up and config is validated.
             if self.logger and self.cache_handler is None:

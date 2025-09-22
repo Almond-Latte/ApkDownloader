@@ -1,11 +1,13 @@
 import json
-from pathlib import Path
-from typing import List, Optional, Tuple, Any
-from logging import Logger
-from rich.console import Console
 from datetime import datetime
+from logging import Logger
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from rich.console import Console
 
 from utils import Json, format_size, make_json_serializable
+
 
 class CacheHandler:
     def __init__(

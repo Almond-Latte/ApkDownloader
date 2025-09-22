@@ -1,76 +1,111 @@
-# settings.py
-# Stores default configuration values.
+"""
+Configuration management for ApkDownloader.
+Loads settings from config file, environment variables, and defaults.
+"""
 
-import sys
-from datetime import datetime, timezone # Import timezone
-from pathlib import Path
-from zoneinfo import ZoneInfo
-import ast
+import json
 import os
-from typing import Any
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 from dotenv import load_dotenv
 
-def load_env(key: str, default_value: Any = None) -> Any:
-    """
-    Load environment variable and convert to appropriate type using ast.literal_eval.
-    Falls back to default_value if key is not set.
-    """
-    try:
-        val = os.getenv(key)
-        if val is None:
-            if default_value is not None:
-                return default_value
-            raise ValueError(f"Environment variable {key} is not set and no default provided.")
-        
-        # Try to evaluate as Python literal (int, str, bool, etc.)
-        try:
-            return ast.literal_eval(val)
-        except (ValueError, SyntaxError):
-            # If literal_eval fails, return as string
-            return val
-    except Exception as e:
-        if default_value is not None:
-            return default_value
-        raise
-
-# Load environment variables
 load_dotenv(override=True)
 
-# --- API Key ---
-API_KEY: str = load_env("API_KEY", "")
 
-# --- Default Paths ---
-_BASE_DIR: Path = Path(load_env("BASE_DIR", str(Path(__file__).parent.parent.resolve())))
-_SCRIPT_DIR: Path = Path(__file__).parent.resolve()
-LOG_DIR: Path = Path(load_env("LOG_DIR", _BASE_DIR / "logs"))
-DOWNLOAD_DIR: Path = Path(load_env("DOWNLOAD_DIR", _BASE_DIR / "downloads"))
-CACHE_DIR: Path = Path(load_env("CACHE_DIR", _BASE_DIR / "_cache"))
-LOGGER_CONFIG_PATH: Path = Path(load_env("LOGGER_CONFIG_PATH", _BASE_DIR / "logger_config.json"))
-ENV_PATH: Path = Path(load_env("ENV_PATH", _BASE_DIR / ".env"))
-APK_LIST_PATH: Path = Path(load_env("APK_LIST_PATH", None))
+def load_config_file(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load configuration from YAML or JSON file."""
+    if config_path is None:
+        env_config_path = os.getenv("CONFIG_FILE")
+        if env_config_path:
+            config_path = Path(env_config_path)
+        else:
+            config_path = Path(__file__).parent.parent / "config.yaml"
 
-# --- Default API and Data Settings ---
-URL: str = load_env("URL", "https://androzoo.uni.lu/api/download")
-MALWARE_THRESHOLD: int = load_env("MALWARE_THRESHOLD", 4)
-N_MALWARE: int = load_env("N_MALWARE", 60000)
-N_CLEANWARE: int = load_env("N_CLEANWARE", 120000)
+    if not config_path.exists():
+        json_path = config_path.with_suffix('.json')
+        if json_path.exists():
+            config_path = json_path
+        else:
+            return {}
 
-# --- Default Date Range Settings (as strings) ---
-# Start date (e.g., beginning of last year)
-DATE_START_STR: str = load_env("DATE_START_STR", "2022-04-01 00:00:00")
-DATE_START: datetime = datetime.strptime(DATE_START_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-# End date (e.g., today's date at the beginning of the day, UTC)
-# Use timezone.utc for consistency
-DATE_END_STR: str = load_env("DATE_END_STR", "2024-04-01 00:00:00")
-DATE_END: datetime = datetime.strptime(DATE_END_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            if config_path.suffix == '.json':
+                return json.load(f)
+            else:
+                try:
+                    import yaml
+                    return yaml.safe_load(f) or {}
+                except ImportError:
+                    f.seek(0)
+                    try:
+                        return json.load(f)
+                    except json.JSONDecodeError:
+                        print(f"Warning: PyYAML not installed and {config_path} is not valid JSON. Using defaults.")
+                        return {}
+    except Exception as e:
+        print(f"Warning: Could not load config file {config_path}: {e}")
+        return {}
 
-# --- Default Performance Settings ---
-CONCURRENT_DOWNLOADS: int = load_env("CONCURRENT_DOWNLOADS", 12)
 
-# --- Reproducibility ---
-RANDOM_SEED: int = load_env("RANDOM_SEED", 42) # Allows for a fixed seed for reproducibility, None means no fixed seed
+config = load_config_file()
 
-# --- Download Options ---
-VERIFY_EXISTING_FILE_HASH: bool = load_env("VERIFY_EXISTING_FILE_HASH", False) # Whether to verify hash of existing files
+_BASE_DIR: Path = Path(__file__).parent.parent.resolve()
 
-# No active code here, just constants/defaults.
+# API Configuration
+API_KEY: str = os.getenv("API_KEY", "")
+URL: str = config.get("api", {}).get("url", "https://androzoo.uni.lu/api/download")
+
+# Directory Paths
+LOG_DIR: Path = Path(os.getenv("LOG_DIR",
+                               config.get("directories", {}).get("logs",
+                                                                str(_BASE_DIR / "logs"))))
+DOWNLOAD_DIR: Path = Path(os.getenv("DOWNLOAD_DIR",
+                                    config.get("directories", {}).get("download",
+                                                                     str(_BASE_DIR / "downloads"))))
+CACHE_DIR: Path = Path(os.getenv("CACHE_DIR",
+                                 config.get("directories", {}).get("cache",
+                                                                  str(_BASE_DIR / "_cache"))))
+
+# Fixed Paths
+LOGGER_CONFIG_PATH: Path = _BASE_DIR / "logger_config.json"
+ENV_PATH: Path = _BASE_DIR / ".env"
+
+# Sample Selection Defaults
+MALWARE_THRESHOLD: int = config.get("samples", {}).get("malware_threshold", 4)
+N_MALWARE: int = config.get("samples", {}).get("default_malware_count", 500)
+N_CLEANWARE: int = config.get("samples", {}).get("default_cleanware_count", 1000)
+
+# Date Range Defaults
+date_config = config.get("date_range", {})
+DATE_START_STR: str = date_config.get("start", "2022-04-01 00:00:00")
+DATE_END_STR: str = date_config.get("end", "2024-04-01 00:00:00")
+
+try:
+    DATE_START: datetime = datetime.strptime(DATE_START_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+except ValueError:
+    DATE_START: datetime = datetime(2022, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+try:
+    DATE_END: datetime = datetime.strptime(DATE_END_STR, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+except ValueError:
+    DATE_END: datetime = datetime(2024, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+# Performance Settings
+CONCURRENT_DOWNLOADS: int = config.get("performance", {}).get("concurrent_downloads", 12)
+
+# Options
+options = config.get("options", {})
+VERIFY_EXISTING_FILE_HASH: bool = options.get("verify_existing_file_hash", False)
+RANDOM_SEED: Optional[int] = options.get("random_seed", None)
+
+# APK List Path
+APK_LIST_PATH: Optional[Path] = None
+apk_list_str = os.getenv("APK_LIST_PATH")
+if apk_list_str:
+    APK_LIST_PATH = Path(apk_list_str)
+
+if not API_KEY:
+    print("Warning: API_KEY not set in environment variables. Please set it in your .env file.")
