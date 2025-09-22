@@ -1,6 +1,6 @@
 # ApkDownloader
 
-![Static Badge](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue) ![VirusTotal](https://img.shields.io/badge/AndroZoo-API-orange)
+![Static Badge](https://img.shields.io/badge/Python-3.13-blue) ![VirusTotal](https://img.shields.io/badge/AndroZoo-API-orange)
 
 This script allows you to easily download APK files from a list of hash values using the [AndroZoo API](https://androzoo.uni.lu/).
 
@@ -30,54 +30,125 @@ This is suitable for wide-ranging collection of APKs rather than downloading fro
 
 Clone from GitHub and install the required packages.
 
+### Using uv (Recommended)
 ```sh
 git clone https://github.com/Almond-Latte/ApkDownloader.git
 cd ApkDownloader
-pip3 install -r requirements.txt
-mv .env.sample .env
+uv sync
+cp .env.sample .env
 ```
-## 🔑 API Key and Hash List Configuration
-In the .env file, specify your AndroZoo API key and the path to the hash list file you want to investigate.
 
-> [!NOTE]
-> If you do not have an AndroZoo API Key, obtain it by following AndroZoo Access.
+### Using pip
+```sh
+git clone https://github.com/Almond-Latte/ApkDownloader.git
+cd ApkDownloader
+pip install -r requirements.txt
+cp .env.sample .env
+```
 
-For example, if the API Key is SAMPLE_API_KEY, the hash list to use is latest.csv, you want to download cleanware and detect at least 4 as malware scanned after 2023-01-01, with 2000 cleanware and 1000 malware samples, using 8 parallel threads, configure it as follows:
+## 🔑 Configuration
+
+### 1. API Key Setup
+In the `.env` file, set your AndroZoo API key:
 
 ```bash
-# General Settings
-API_KEY = 'SAMPLE_API_KEY'
-APK_LIST = 'latest.csv'
-URL = "https://androzoo.uni.lu/api/download"
+# .env
+API_KEY = 'YOUR_ANDROZOO_API_KEY'
+```
 
-# Value of Virus Total Detection to determine if it is malware
-MALWARE_THRESHOLD = 4
+> [!NOTE]
+> If you don't have an AndroZoo API Key, obtain one by following [AndroZoo Access](https://androzoo.uni.lu/access).
 
-# Number of Samples
-N_CLEANWARE = 2000
-N_MALWARE = 1000
+### 2. Default Settings (Optional)
+Default settings are managed in `config.yaml`. You can customize these defaults:
 
-# Date Filtering
-DATE_AFTER = '2023-01-01 00:00:00'
+```yaml
+# config.yaml
+# Sample Selection
+samples:
+  malware_threshold: 4        # VirusTotal detection count threshold
+  default_cleanware_count: 1000
+  default_malware_count: 500
 
-# Multi Threading
-CONCURRENT_DOWNLOADS = 8
+# Date Range
+date_range:
+  start: "2022-04-01 00:00:00"
+  end: "2024-12-01 00:00:00"
+
+# Performance
+performance:
+  concurrent_downloads: 12
 ```
 
 > [!IMPORTANT]
-> There are restrictions on the number of parallel downloads. Be careful not to overload AndroZoo. Please check the AndroZoo API Documentation.
+> There are restrictions on the number of parallel downloads. Be careful not to overload AndroZoo. Please check the [AndroZoo API Documentation](https://androzoo.uni.lu/api_doc).
 
 ## ▶ Execution
-Run the script with the following command:
 
+### Basic Usage
 ```bash
-python3 ApkDownloader.py
+# Using uv
+uv run python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
+
+# Using python directly
+python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
 ```
+
+### Advanced Usage with Custom Parameters
+```bash
+python src/ApkDownloader.py \
+    --apk-list latest.csv \
+    --n-cleanware 2000 \
+    --n-malware 1000 \
+    --date-start "2023-01-01 00:00:00" \
+    --date-end "2024-12-01 00:00:00" \
+    --malware-threshold 10 \
+    --verify-hash
+```
+
+### Command Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--apk-list` | Path to APK list (CSV or Feather file) | Required |
+| `--n-cleanware` | Number of cleanware samples to download | 1000 |
+| `--n-malware` | Number of malware samples to download | 500 |
+| `--date-start` | Start date for filtering (YYYY-MM-DD HH:MM:SS) | 2022-04-01 00:00:00 |
+| `--date-end` | End date for filtering (YYYY-MM-DD HH:MM:SS) | 2024-12-01 00:00:00 |
+| `--malware-threshold` | VirusTotal detection threshold (0-100) | 4 |
+| `--download-dir` | Directory to save downloaded APKs | ./downloads |
+| `--random-seed` | Seed for reproducibility | None |
+| `--verify-hash` | Verify hash of existing files | False |
 
 It will automatically set up logging, create directories, and start downloading APKs.
 
 ![state of progress](https://github.com/Almond-Latte/ApkDownloader/assets/147462539/ee5924a3-1f2b-400a-85e8-3b82c0139665)
 
-To interrupt execution, press Ctrl + C. The currently downloading APK will be interrupted, and incompletely downloaded APKs will be deleted.
+To interrupt execution, press `Ctrl + C`. The currently downloading APK will be interrupted, and incompletely downloaded APKs will be deleted.
 
-🙏 Have a great security life! If you have any questions or feedback, feel free to post them on Issues.
+## 📁 Directory Structure
+
+```
+downloads/
+├── cleanware/     # Benign APK files
+└── malware/       # Malicious APK files
+
+logs/              # Execution logs
+
+_cache/            # Filtered data cache
+```
+
+## 🔧 Development
+
+### Running Tests
+```bash
+uv run ruff check src/
+uv run pyright src/
+```
+
+### Code Formatting
+```bash
+uv run ruff format src/
+```
+
+🙏 Have a great security life! If you have any questions or feedback, feel free to post them on [Issues](https://github.com/Almond-Latte/ApkDownloader/issues).

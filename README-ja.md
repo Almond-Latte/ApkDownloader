@@ -1,6 +1,6 @@
 # ApkDownloader
 
-![Static Badge](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue) ![VirusTotal](https://img.shields.io/badge/AndroZoo-API-orange)
+![Static Badge](https://img.shields.io/badge/Python-3.13-blue) ![VirusTotal](https://img.shields.io/badge/AndroZoo-API-orange)
 
 このスクリプトは [AndroZoo API](https://androzoo.uni.lu/) を用いて、ハッシュ値リストから簡単にAPKファイルをダウンロードすることができます。
 
@@ -17,7 +17,7 @@ APKハッシュ値リストはAndroZooが公開している [Lists of APKs](http
 
 - **`vt_detection`のしきい値設定**: マルウェアとして採用するAPKのVirusTotal検知数のしきい値を設定できます。指定した検知数**以上**のマルウェアをダウンロードします。
 - **`vt_scan_date`のしきい値設定**: マルウェアとして採用するAPKのVirusTotal最新スキャン日時のしきい値を設定できます。指定した日時**以降**のAPKをダウンロードします。
-- **検体数指定**: 条件に当てはまる良性アプリケーション、マルウェアの収集検体数を指定することができます。 
+- **検体数指定**: 条件に当てはまる良性アプリケーション、マルウェアの収集検体数を指定することができます。
 - **フィルタリング結果のキャッシュ化**: AndroZooが公表しているレコードは2300万レコードほどあり、上記フィルタリングに時間が掛かります。一度実行した条件のものはキャッシュ化することでフィルタリング実行時間を1秒未満に削減します。
 - **ログ出力**: `log` ディレクトリに実行ログを出力。ログ名は日本標準時で記録されます。
 - **データ保存**: `Downloads` ディレクトリに、良性アプリケーションとマルウェアを分けて保存します。
@@ -30,61 +30,126 @@ APKハッシュ値リストはAndroZooが公開している [Lists of APKs](http
 
 GitHubからクローンし、必要なパッケージをインストールしてください。
 
+### uvを使用する場合（推奨）
 ```sh
 git clone https://github.com/Almond-Latte/ApkDownloader.git
 cd ApkDownloader
-pip3 install -r requirements.txt
-mv .env.sample .env
+uv sync
+cp .env.sample .env
 ```
 
-## 🔑 APIキーとハッシュ値リストの設定
+### pipを使用する場合
+```sh
+git clone https://github.com/Almond-Latte/ApkDownloader.git
+cd ApkDownloader
+pip install -r requirements.txt
+cp .env.sample .env
+```
 
-`.env` ファイルにAndroZooのAPIキーと、調べたいファイルのハッシュ値リストファイルのパスを記述してください。
+## 🔑 設定
+
+### 1. APIキーの設定
+`.env` ファイルにAndroZooのAPIキーを設定してください：
+
+```bash
+# .env
+API_KEY = 'YOUR_ANDROZOO_API_KEY'
+```
 
 > [!NOTE]
 > AndroZoo API Keyを取得していない場合は、[AndroZoo Access](https://androzoo.uni.lu/access)に従いAPI Keyを取得してください。
 
-例えば、API Keyが`SAMPLE_API_KEY` , 使用するハッシュ値リストが `latest.csv`であり、`2023-01-01`以降に最新スキャンがされたAPKのうち良性アプリケーションを`2000`, 検知数`4`以上のものをマルウェアとして`1000`件, 並列に`8`スレッドでダウンロードする場合は以下のように設定します。
+### 2. デフォルト設定（オプション）
+デフォルト設定は `config.yaml` で管理されています。これらのデフォルト値をカスタマイズできます：
 
- ```bash:.env
-# General Settings
-API_KEY = 'SAMPLE_APK_KEY'
-APK_LIST = 'latest.csv'
-URL = "https://androzoo.uni.lu/api/download"
+```yaml
+# config.yaml
+# サンプル選択
+samples:
+  malware_threshold: 4        # VirusTotal検知数のしきい値
+  default_cleanware_count: 1000
+  default_malware_count: 500
 
-# Value of Virus Total Detection to determine if it is malware
-MALWARE_THRESHOLD = 4
+# 日付範囲
+date_range:
+  start: "2022-04-01 00:00:00"
+  end: "2024-12-01 00:00:00"
 
-# Number of Samples
-N_CLEANWARE = 2000
-N_MALWARE = 1000
-
-# Date Filtering
-DATE_AFTER = '2023-01-01 00:00:00'
-
-# Multi Threading
-CONCURRENT_DOWNLOADS = 8
- ```
+# パフォーマンス
+performance:
+  concurrent_downloads: 12
+```
 
 > [!IMPORTANT]
->
 > 並列ダウンロード数には制約があります。AndroZooに負荷をかけてしまわぬようご注意ください。必ず [AndroZoo API Documentation](https://androzoo.uni.lu/api_doc) をご確認ください。
-
-
 
 ## ▶ 実行方法
 
-下記のコマンドでスクリプトを実行します。
-
+### 基本的な使用方法
 ```bash
-python3 ApkDownloader.py
+# uvを使用
+uv run python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
+
+# pythonを直接使用
+python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
 ```
 
-![state of progress](https://github.com/Almond-Latte/ApkDownloader/assets/147462539/ee5924a3-1f2b-400a-85e8-3b82c0139665)
+### カスタムパラメータを使用した高度な使用方法
+```bash
+python src/ApkDownloader.py \
+    --apk-list latest.csv \
+    --n-cleanware 2000 \
+    --n-malware 1000 \
+    --date-start "2023-01-01 00:00:00" \
+    --date-end "2024-12-01 00:00:00" \
+    --malware-threshold 10 \
+    --verify-hash
+```
+
+### コマンドラインオプション
+
+| オプション | 説明 | デフォルト |
+|--------|-------------|---------|
+| `--apk-list` | APKリストへのパス（CSVまたはFeatherファイル） | 必須 |
+| `--n-cleanware` | ダウンロードするクリーンウェアサンプル数 | 1000 |
+| `--n-malware` | ダウンロードするマルウェアサンプル数 | 500 |
+| `--date-start` | フィルタリング開始日（YYYY-MM-DD HH:MM:SS） | 2022-04-01 00:00:00 |
+| `--date-end` | フィルタリング終了日（YYYY-MM-DD HH:MM:SS） | 2024-12-01 00:00:00 |
+| `--malware-threshold` | VirusTotal検知しきい値（0-100） | 4 |
+| `--download-dir` | APK保存ディレクトリ | ./downloads |
+| `--random-seed` | 再現性のためのシード値 | None |
+| `--verify-hash` | 既存ファイルのハッシュ検証 | False |
 
 自動でログの設定、ディレクトリ作成、APKのダウンロードが開始されます。
 
+![state of progress](https://github.com/Almond-Latte/ApkDownloader/assets/147462539/ee5924a3-1f2b-400a-85e8-3b82c0139665)
+
 実行中断する際には`Ctrl + C`を押してください。現在ダウンロード中のAPKは中断され、不完全にダウンロードしたAPKは削除されます。
 
+## 📁 ディレクトリ構造
+
+```
+downloads/
+├── cleanware/     # 良性APKファイル
+└── malware/       # 悪性APKファイル
+
+logs/              # 実行ログ
+
+_cache/            # フィルタリングデータのキャッシュ
+```
+
+## 🔧 開発
+
+### テストの実行
+```bash
+uv run ruff check src/
+uv run pyright src/
+```
+
+### コードフォーマット
+```bash
+uv run ruff format src/
+```
+
 🙏 よいセキュリティライフを！
-質問やフィードバックがある場合は、お気軽に[Issues](https://github.com/almond-latte/fetching-virustotal-file-report/issues)に投稿してください。
+質問やフィードバックがある場合は、お気軽に[Issues](https://github.com/Almond-Latte/ApkDownloader/issues)に投稿してください。
