@@ -39,7 +39,7 @@ from utils import Json, calculate_sha256, convert_csv_to_feather, make_json_seri
 
 # Create a Typer app instance for the command-line interface
 app = typer.Typer(
-    help="APK Downloader: Downloads APKs using Feather or CSV input. CSV files are auto-converted to Feather.",
+    help="APK Downloader: Analyze and download APK files from AndroZoo. Use 'survey' to analyze before downloading.",
     add_completion=False,
 )
 
@@ -701,13 +701,17 @@ class ApkDownloader:
                 .filter(pl.col("vt_detection_int") >= self.malware_threshold)
             )
 
-            # Define cleanware candidates: vt_detection == 0 and from Google Play Store
+            # Define cleanware candidates: vt_detection == 0 and optionally from Google Play Store
             cleanware_candidates_lf = (
                 base_filtered_lf
                 .filter(pl.col("vt_detection_int") == 0)
-                # Filter for apps listed only on 'play.google.com'
-                .filter(pl.col("markets").str.strip_chars() == "play.google.com")
             )
+
+            # Apply Google Play Store filter if enabled in settings
+            if settings.GOOGLE_PLAY_ONLY:
+                cleanware_candidates_lf = cleanware_candidates_lf.filter(
+                    pl.col("markets").str.strip_chars() == "play.google.com"
+                )
 
             if logger: logger.info("Applying filters and collecting candidate dataframes...")
 
@@ -1257,8 +1261,8 @@ class ApkDownloader:
             self.progress_manager.complete_task(TaskCode.DOWNLOAD_APKS, StatusCode.ERROR, error=e)
             self._refresh_live_display(download_panel=True)
 
-@app.command()
-def main(
+@app.command(name="download")
+def download(
     api_key: str = typer.Option(settings.API_KEY, help="Your VirusTotal API key"),
     apk_list: Path = typer.Option(settings.APK_LIST_PATH, exists=True, file_okay=True, dir_okay=False, readable=True, help="Path to the input APK list Feather or CSV file. CSV files are auto-converted to Feather."),
     download_dir: Path = typer.Option(settings.DOWNLOAD_DIR, file_okay=False, dir_okay=True, writable=True, help="Directory to save downloaded APKs"),
@@ -1270,7 +1274,7 @@ def main(
     random_seed: Optional[int] = typer.Option(settings.RANDOM_SEED, help="Seed for random number generation to ensure reproducibility. If None, seed is not fixed."), # Add random_seed option
     verify_hash: bool = typer.Option(settings.VERIFY_EXISTING_FILE_HASH, help="Verify hash of existing files. If False, existing files are skipped without verification."),
 ):
-    """Main entry point for the APK Downloader application."""
+    """Download APK files based on the specified criteria."""
 
     console: Console = Console()
 
@@ -1340,6 +1344,275 @@ def main(
         
         # Start downloading the selected APKs
         downloader.download_apks(cleanware_list, malware_list)
+
+@app.command(name="survey")
+def survey(
+    api_key: str = typer.Option(settings.API_KEY, help="Your AndroZoo API key"),
+    apk_list: Path = typer.Option(settings.APK_LIST_PATH, exists=True, file_okay=True, dir_okay=False, readable=True, help="Path to the input APK list Feather or CSV file"),
+    n_cleanware: int = typer.Option(settings.N_CLEANWARE, min=1, help="Target number of cleanware samples"),
+    n_malware: int = typer.Option(settings.N_MALWARE, min=1, help="Target number of malware samples"),
+    date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
+    date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
+    malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold (0-100)"),
+    export_hashes: Optional[Path] = typer.Option(None, help="Export hash list to CSV file"),
+    show_distribution: bool = typer.Option(True, help="Show temporal distribution of samples"),
+    distribution_granularity: str = typer.Option("year", help="Distribution granularity: year, quarter, or month"),
+):
+    """Survey and analyze APK samples without downloading.
+
+    This command allows you to:
+    - Check how many samples match your criteria
+    - View the temporal distribution of samples
+    - Export hash lists for later use
+    """
+
+    console: Console = Console()
+
+    # Handle CSV to Feather conversion (same as download command)
+    processed_apk_list_path = apk_list
+    if apk_list.suffix.lower() == ".csv":
+        feather_path = apk_list.with_suffix(".feather")
+        console.print(f"CSV file provided: {apk_list}")
+        if feather_path.exists() and os.access(feather_path, os.R_OK):
+            console.print(f"Found existing and readable Feather file: {feather_path}. Using it.")
+            processed_apk_list_path = feather_path
+        else:
+            if feather_path.exists():
+                console.print(f"Found existing Feather file {feather_path}, but it's not readable. Attempting to overwrite.")
+            console.print(f"Converting '{apk_list}' to '{feather_path}'...")
+            if convert_csv_to_feather(apk_list, feather_path):
+                console.print(f"[green]Successfully converted CSV to Feather: {feather_path}[/green]")
+                processed_apk_list_path = feather_path
+            else:
+                console.print(f"[bold red]Error: Failed to convert CSV file '{apk_list}'[/bold red]")
+                raise typer.Exit(code=1)
+
+    # Parse dates
+    data_start: datetime = datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    data_end: datetime = datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+    # Create analyzer instance
+    console.print("\n[bold cyan]Starting APK Survey Analysis...[/bold cyan]\n")
+
+    # Load and filter data
+    try:
+        import polars as pl
+        df = pl.read_ipc(processed_apk_list_path)
+
+        # Convert vt_scan_date to datetime if it's a string
+        if df["vt_scan_date"].dtype == pl.Utf8:
+            df = df.with_columns(
+                pl.col("vt_scan_date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S").dt.replace_time_zone("UTC")
+            )
+
+        # Apply date filter
+        df = df.filter(
+            (pl.col("vt_scan_date").is_not_null()) &
+            (pl.col("vt_scan_date") >= data_start) &
+            (pl.col("vt_scan_date") <= data_end)
+        )
+
+        # Split into malware and cleanware
+        malware_df = df.filter(
+            (pl.col("vt_detection").is_not_null()) &
+            (pl.col("vt_detection") >= malware_threshold)
+        )
+
+        cleanware_df = df.filter(
+            (pl.col("vt_detection").is_not_null()) &
+            (pl.col("vt_detection") == 0) &  # Clean apps have 0 detections
+            (pl.col("markets").is_not_null())
+        )
+
+        # Apply Google Play Store filter if enabled in settings
+        if settings.GOOGLE_PLAY_ONLY:
+            cleanware_df = cleanware_df.filter(
+                pl.col("markets").str.strip_chars() == "play.google.com"  # Only Google Play Store apps
+            )
+
+        # Display summary statistics
+        summary_table = Table(title="APK Sample Analysis Summary", box=box.ROUNDED)
+        summary_table.add_column("Category", style="cyan")
+        summary_table.add_column("Available", justify="right", style="green")
+        summary_table.add_column("Requested", justify="right", style="yellow")
+        summary_table.add_column("Percentage", justify="right", style="magenta")
+
+        total_malware = len(malware_df)
+        total_cleanware = len(cleanware_df)
+
+        malware_pct = min(100, (n_malware / total_malware * 100)) if total_malware > 0 else 0
+        cleanware_pct = min(100, (n_cleanware / total_cleanware * 100)) if total_cleanware > 0 else 0
+
+        summary_table.add_row(
+            "Malware",
+            f"{total_malware:,}",
+            f"{min(n_malware, total_malware):,}",
+            f"{malware_pct:.1f}%"
+        )
+        summary_table.add_row(
+            "Cleanware",
+            f"{total_cleanware:,}",
+            f"{min(n_cleanware, total_cleanware):,}",
+            f"{cleanware_pct:.1f}%"
+        )
+
+        console.print(summary_table)
+        console.print()
+
+        # Show temporal distribution
+        if show_distribution:
+            console.print("[bold cyan]Temporal Distribution of Samples:[/bold cyan]\n")
+
+            # Validate granularity
+            if distribution_granularity not in ["year", "quarter", "month"]:
+                console.print(f"[yellow]Warning: Invalid granularity '{distribution_granularity}'. Using 'year'.[/yellow]")
+                distribution_granularity = "year"
+
+            if "vt_scan_date" in df.columns:
+                # Add temporal columns based on granularity
+                if distribution_granularity == "year":
+                    df_with_time = df.with_columns(
+                        pl.col("vt_scan_date").dt.year().alias("period")
+                    )
+                    title = "Yearly Distribution"
+                    period_label = "Year"
+
+                elif distribution_granularity == "quarter":
+                    df_with_time = df.with_columns([
+                        pl.col("vt_scan_date").dt.year().alias("year"),
+                        pl.col("vt_scan_date").dt.quarter().alias("quarter")
+                    ]).with_columns(
+                        pl.format("{}-Q{}", pl.col("year"), pl.col("quarter")).alias("period")
+                    )
+                    title = "Quarterly Distribution"
+                    period_label = "Quarter"
+
+                else:  # month
+                    df_with_time = df.with_columns([
+                        pl.col("vt_scan_date").dt.year().alias("year"),
+                        pl.col("vt_scan_date").dt.month().alias("month")
+                    ]).with_columns(
+                        (pl.col("year").cast(pl.Utf8) + "-" +
+                         pl.col("month").cast(pl.Utf8).str.pad_start(2, "0")).alias("period")
+                    )
+                    title = "Monthly Distribution"
+                    period_label = "Month"
+
+                # Group by period and calculate distribution
+                if settings.GOOGLE_PLAY_ONLY:
+                    cleanware_filter = ((pl.col("vt_detection") == 0) &
+                                       (pl.col("markets").str.strip_chars() == "play.google.com"))
+                else:
+                    cleanware_filter = ((pl.col("vt_detection") == 0) &
+                                       pl.col("markets").is_not_null())
+
+                period_dist = df_with_time.group_by("period").agg([
+                    pl.col("sha256").count().alias("total"),
+                    (pl.col("vt_detection") >= malware_threshold).sum().alias("malware"),
+                    cleanware_filter.sum().alias("cleanware")
+                ]).sort("period")
+
+                # Create distribution table
+                dist_table = Table(title=title, box=box.SIMPLE)
+                dist_table.add_column(period_label, style="cyan")
+                dist_table.add_column("Total", justify="right")
+                dist_table.add_column("Malware", justify="right", style="red")
+                dist_table.add_column("Cleanware", justify="right", style="green")
+
+                # Get all rows
+                rows = list(period_dist.iter_rows(named=True))
+
+                for row in rows:
+                    dist_table.add_row(
+                        str(row["period"]),
+                        f"{row['total']:,}",
+                        f"{row['malware']:,}",
+                        f"{row['cleanware']:,}"
+                    )
+
+                console.print(dist_table)
+                console.print()
+
+        # Export hash lists if requested
+        if export_hashes:
+            console.print(f"\n[bold cyan]Exporting hash lists to {export_hashes}...[/bold cyan]")
+
+            # Sample the data
+            sampled_malware = malware_df.sample(n=min(n_malware, len(malware_df)), shuffle=True)
+            sampled_cleanware = cleanware_df.sample(n=min(n_cleanware, len(cleanware_df)), shuffle=True)
+
+            # Combine and add labels
+            export_df = pl.concat([
+                sampled_malware.with_columns(pl.lit("malware").alias("classification")),
+                sampled_cleanware.with_columns(pl.lit("cleanware").alias("classification"))
+            ])
+
+            # Select relevant columns and export
+            export_df = export_df.select([
+                "sha256",
+                "classification",
+                "vt_detection",
+                "vt_scan_date",
+                "apk_size",
+                "pkg_name"
+            ])
+
+            export_df.write_csv(export_hashes)
+            console.print(f"[green]Successfully exported {len(export_df)} hash entries to {export_hashes}[/green]")
+
+        # Size estimation
+        console.print("\n[bold cyan]Estimated Download Size:[/bold cyan]\n")
+
+        # Calculate average sizes
+        avg_malware_size = malware_df["apk_size"].mean() if "apk_size" in malware_df.columns and len(malware_df) > 0 else 0
+        avg_cleanware_size = cleanware_df["apk_size"].mean() if "apk_size" in cleanware_df.columns and len(cleanware_df) > 0 else 0
+
+        est_malware_total = avg_malware_size * min(n_malware, total_malware) / (1024 * 1024)  # Convert to MB
+        est_cleanware_total = avg_cleanware_size * min(n_cleanware, total_cleanware) / (1024 * 1024)
+        est_total = est_malware_total + est_cleanware_total
+
+        size_table = Table(title="Estimated Download Sizes", box=box.SIMPLE)
+        size_table.add_column("Category", style="cyan")
+        size_table.add_column("Average Size", justify="right")
+        size_table.add_column("Total Size", justify="right", style="yellow")
+
+        size_table.add_row(
+            "Malware",
+            f"{avg_malware_size / (1024 * 1024):.2f} MB",
+            f"{est_malware_total:.2f} MB"
+        )
+        size_table.add_row(
+            "Cleanware",
+            f"{avg_cleanware_size / (1024 * 1024):.2f} MB",
+            f"{est_cleanware_total:.2f} MB"
+        )
+        size_table.add_row(
+            "[bold]Total[/bold]",
+            "",
+            f"[bold]{est_total:.2f} MB[/bold]"
+        )
+
+        console.print(size_table)
+        console.print()
+
+        # Final recommendations
+        if total_malware < n_malware or total_cleanware < n_cleanware:
+            console.print("[yellow]Warning: Not enough samples available for your criteria.[/yellow]")
+            if total_malware < n_malware:
+                console.print(f"  - Malware: Only {total_malware} available, requested {n_malware}")
+            if total_cleanware < n_cleanware:
+                console.print(f"  - Cleanware: Only {total_cleanware} available, requested {n_cleanware}")
+            console.print("\nConsider:")
+            console.print("  - Expanding the date range")
+            console.print("  - Adjusting the malware threshold")
+            console.print("  - Using a different APK list")
+        else:
+            console.print("[green]Sufficient samples available for your criteria![/green]")
+            console.print(f"\nRun 'download' command with the same parameters to start downloading.")
+
+    except Exception as e:
+        console.print(f"[bold red]Error during analysis: {e}[/bold red]")
+        raise typer.Exit(code=1)
 
 if __name__ == "__main__":
     app()
