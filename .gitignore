@@ -192,6 +192,7 @@ config.yaml
 *.csv
 !test_data.csv
 *.feather
+*.feather.meta
 _cache/
 logs/
 downloads/

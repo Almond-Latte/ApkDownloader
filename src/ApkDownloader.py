@@ -1278,19 +1278,24 @@ def download(
 
     console: Console = Console()
 
-    # --- Handle CSV to Feather conversion ---
+    # --- Handle CSV to Feather conversion with validation ---
     processed_apk_list_path = apk_list
     if apk_list.suffix.lower() == ".csv":
         feather_path = apk_list.with_suffix(".feather")
         console.print(f"CSV file provided: {apk_list}")
-        if feather_path.exists() and os.access(feather_path, os.R_OK):
-            console.print(f"Found existing and readable Feather file: {feather_path}. Using it.")
+
+        # Check if we have a valid Feather cache
+        from utils import is_feather_cache_valid
+        if is_feather_cache_valid(apk_list, feather_path):
+            console.print(f"[green]Found valid Feather cache: {feather_path}[/green]")
             processed_apk_list_path = feather_path
         else:
+            # Need to convert or re-convert
             if feather_path.exists():
-                console.print(f"Found existing Feather file {feather_path}, but it's not readable or accessible. Attempting to overwrite.")
-            
-            console.print(f"Attempting to convert '{apk_list}' to '{feather_path}'...")
+                console.print(f"[yellow]Feather cache is outdated or invalid. Re-converting...[/yellow]")
+            else:
+                console.print(f"Attempting to convert '{apk_list}' to '{feather_path}'...")
+
             if convert_csv_to_feather(apk_list, feather_path):
                 console.print(f"[green]Successfully converted CSV to Feather: {feather_path}[/green]")
                 processed_apk_list_path = feather_path
@@ -1368,18 +1373,24 @@ def survey(
 
     console: Console = Console()
 
-    # Handle CSV to Feather conversion (same as download command)
+    # Handle CSV to Feather conversion with validation
     processed_apk_list_path = apk_list
     if apk_list.suffix.lower() == ".csv":
         feather_path = apk_list.with_suffix(".feather")
         console.print(f"CSV file provided: {apk_list}")
-        if feather_path.exists() and os.access(feather_path, os.R_OK):
-            console.print(f"Found existing and readable Feather file: {feather_path}. Using it.")
+
+        # Check if we have a valid Feather cache
+        from utils import is_feather_cache_valid
+        if is_feather_cache_valid(apk_list, feather_path):
+            console.print(f"[green]Found valid Feather cache: {feather_path}[/green]")
             processed_apk_list_path = feather_path
         else:
+            # Need to convert or re-convert
             if feather_path.exists():
-                console.print(f"Found existing Feather file {feather_path}, but it's not readable. Attempting to overwrite.")
-            console.print(f"Converting '{apk_list}' to '{feather_path}'...")
+                console.print(f"[yellow]Feather cache is outdated or invalid. Re-converting...[/yellow]")
+            else:
+                console.print(f"Converting '{apk_list}' to '{feather_path}'...")
+
             if convert_csv_to_feather(apk_list, feather_path):
                 console.print(f"[green]Successfully converted CSV to Feather: {feather_path}[/green]")
                 processed_apk_list_path = feather_path
