@@ -18,6 +18,7 @@ APKハッシュ値リストはAndroZooが公開している [Lists of APKs](http
 - **`vt_detection`のしきい値設定**: マルウェアとして採用するAPKのVirusTotal検知数のしきい値を設定できます。指定した検知数**以上**のマルウェアをダウンロードします。
 - **`vt_scan_date`のしきい値設定**: マルウェアとして採用するAPKのVirusTotal最新スキャン日時のしきい値を設定できます。指定した日時**以降**のAPKをダウンロードします。
 - **検体数指定**: 条件に当てはまる良性アプリケーション、マルウェアの収集検体数を指定することができます。
+- **Google Play Storeフィルタリング**: 良性サンプルをGoogle Play Storeのアプリのみに制限するオプション（config.yamlの `collection.google_play_only` で設定可能）。
 - **フィルタリング結果のキャッシュ化**: AndroZooが公表しているレコードは2300万レコードほどあり、上記フィルタリングに時間が掛かります。一度実行した条件のものはキャッシュ化することでフィルタリング実行時間を1秒未満に削減します。
 - **ログ出力**: `log` ディレクトリに実行ログを出力。ログ名は日本標準時で記録されます。
 - **データ保存**: `Downloads` ディレクトリに、良性アプリケーションとマルウェアを分けて保存します。
@@ -59,25 +60,37 @@ API_KEY = 'YOUR_ANDROZOO_API_KEY'
 > [!NOTE]
 > AndroZoo API Keyを取得していない場合は、[AndroZoo Access](https://androzoo.uni.lu/access)に従いAPI Keyを取得してください。
 
-### 2. デフォルト設定（オプション）
-デフォルト設定は `config.yaml` で管理されています。これらのデフォルト値をカスタマイズできます：
+### 2. 設定ファイルのセットアップ
+設定ファイルの例をコピーしてカスタマイズしてください：
+
+```bash
+cp config.yaml.example config.yaml
+```
+
+`config.yaml` を編集してデフォルト設定をカスタマイズ：
 
 ```yaml
 # config.yaml
-# サンプル選択
-samples:
-  malware_threshold: 4        # VirusTotal検知数のしきい値
-  default_cleanware_count: 1000
-  default_malware_count: 500
+# サンプル収集設定
+collection:
+  min_detections_for_malware: 5  # VirusTotal検知しきい値
+  benign_samples: 1000            # クリーンサンプルのデフォルト数
+  malware_samples: 500             # マルウェアサンプルのデフォルト数
+  google_play_only: true           # 良性サンプルをGoogle Play Storeのみに制限
 
-# 日付範囲
-date_range:
-  start: "2022-04-01 00:00:00"
-  end: "2024-12-01 00:00:00"
+# フィルタリング期間
+filtering:
+  date_from: "2021-04-01 00:00:00"   # フィルタリング開始日
+  date_until: "2024-12-31 23:59:59"  # フィルタリング終了日
 
-# パフォーマンス
+# パフォーマンス設定
 performance:
-  concurrent_downloads: 12
+  parallel_downloads: 12           # 同時ダウンロード数
+
+# 動作オプション
+behavior:
+  skip_hash_verification: false    # SHA256検証をスキップする場合はtrue
+  random_seed: 42                  # 再現性のためのシード（ランダムの場合はnull）
 ```
 
 > [!IMPORTANT]
@@ -85,18 +98,44 @@ performance:
 
 ## ▶ 実行方法
 
-### 基本的な使用方法
+### Surveyモード（ダウンロード前の調査）
 ```bash
-# uvを使用
-uv run python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
+# ダウンロードせずにサンプルを分析
+uv run python src/ApkDownloader.py survey --n-cleanware 1000 --n-malware 500
+
+# ハッシュリストをエクスポート
+uv run python src/ApkDownloader.py survey --export-hashes analysis.csv
+
+# カスタム日付範囲で調査
+uv run python src/ApkDownloader.py survey \
+    --date-start "2023-01-01 00:00:00" \
+    --date-end "2024-12-31 23:59:59" \
+    --export-hashes survey_results.csv
+```
+
+### Downloadモード
+```bash
+# 基本的なダウンロード
+uv run python src/ApkDownloader.py download --apk-list latest.csv --n-cleanware 100 --n-malware 50
 
 # pythonを直接使用
-python src/ApkDownloader.py --apk-list latest.csv --n-cleanware 100 --n-malware 50
+python src/ApkDownloader.py download --apk-list latest.csv --n-cleanware 100 --n-malware 50
 ```
 
 ### カスタムパラメータを使用した高度な使用方法
 ```bash
-python src/ApkDownloader.py \
+# まず、利用可能性を確認するために調査
+python src/ApkDownloader.py survey \
+    --apk-list latest.csv \
+    --n-cleanware 2000 \
+    --n-malware 1000 \
+    --date-start "2023-01-01 00:00:00" \
+    --date-end "2024-12-01 00:00:00" \
+    --malware-threshold 10 \
+    --export-hashes candidates.csv
+
+# 結果に満足したらダウンロード
+python src/ApkDownloader.py download \
     --apk-list latest.csv \
     --n-cleanware 2000 \
     --n-malware 1000 \
@@ -106,19 +145,28 @@ python src/ApkDownloader.py \
     --verify-hash
 ```
 
+### コマンド
+
+| コマンド | 説明 |
+|---------|------|
+| `survey` | ダウンロードせずにAPKサンプルを分析。統計、分布表示、ハッシュリストのエクスポートが可能 |
+| `download` | 指定された条件に基づいてAPKファイルをダウンロード |
+
 ### コマンドラインオプション
 
-| オプション | 説明 | デフォルト |
-|--------|-------------|---------|
-| `--apk-list` | APKリストへのパス（CSVまたはFeatherファイル） | 必須 |
-| `--n-cleanware` | ダウンロードするクリーンウェアサンプル数 | 1000 |
-| `--n-malware` | ダウンロードするマルウェアサンプル数 | 500 |
-| `--date-start` | フィルタリング開始日（YYYY-MM-DD HH:MM:SS） | 2022-04-01 00:00:00 |
-| `--date-end` | フィルタリング終了日（YYYY-MM-DD HH:MM:SS） | 2024-12-01 00:00:00 |
-| `--malware-threshold` | VirusTotal検知しきい値（0-100） | 4 |
-| `--download-dir` | APK保存ディレクトリ | ./downloads |
-| `--random-seed` | 再現性のためのシード値 | None |
-| `--verify-hash` | 既存ファイルのハッシュ検証 | False |
+| オプション | 説明 | デフォルト（config.yamlから） | 対応コマンド |
+| `--apk-list` | APKリストへのパス（CSVまたはFeatherファイル） | config.yamlの値 | 両方 |
+| `--n-cleanware` | クリーンウェアサンプル数 | benign_samplesの値 | 両方 |
+| `--n-malware` | マルウェアサンプル数 | malware_samplesの値 | 両方 |
+| `--date-start` | フィルタリング開始日（YYYY-MM-DD HH:MM:SS） | date_fromの値 | 両方 |
+| `--date-end` | フィルタリング終了日（YYYY-MM-DD HH:MM:SS） | date_untilの値 | 両方 |
+| `--malware-threshold` | VirusTotal検知しきい値（0-100） | min_detections_for_malwareの値 | 両方 |
+| `--export-hashes` | ハッシュリストをCSVファイルにエクスポート | なし | survey |
+| `--show-distribution` | 時期別分布を表示 | True | survey |
+| `--distribution-granularity` | 時期の粒度（year/quarter/month） | year | survey |
+| `--download-dir` | APK保存ディレクトリ | ./downloads | download |
+| `--random-seed` | 再現性のためのシード値 | 42 | download |
+| `--verify-hash` | 既存ファイルのハッシュ検証 | False | download |
 
 自動でログの設定、ディレクトリ作成、APKのダウンロードが開始されます。
 
