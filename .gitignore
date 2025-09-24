@@ -188,6 +188,7 @@ cython_debug/
 .cursorindexingignore
 
 # Project specific
+config.yaml
 *.csv
 !test_data.csv
 *.feather
