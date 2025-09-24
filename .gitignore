@@ -187,4 +187,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-
+# Project specific
+*.csv
+!test_data.csv
+*.feather
+_cache/
+logs/
+downloads/
