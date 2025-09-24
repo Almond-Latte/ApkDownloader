@@ -1,5 +1,5 @@
 # ApkDownloader Configuration File
-# This file contains default settings that can be overridden by CLI arguments
+# Copy this file to config.yaml and customize for your needs
 
 # AndroZoo API Settings
 api:
@@ -15,11 +15,11 @@ directories:
 # Sample Collection Settings
 collection:
   # Samples with this many or more VirusTotal detections are considered malware
-  min_detections_for_malware: 5
+  min_detections_for_malware: 4
 
   # Default number of samples to collect
-  benign_samples: 1000          # Number of benign (clean) samples
-  malware_samples: 501          # Number of malware samples
+  benign_samples: 1000         # Number of benign (clean) samples
+  malware_samples: 500          # Number of malware samples
 
   # Filter benign samples to only Google Play Store apps
   google_play_only: true        # Set to false to include apps from all markets
@@ -27,8 +27,8 @@ collection:
 # Filtering Period
 filtering:
   # Date range for filtering the dataset (YYYY-MM-DD HH:MM:SS format)
-  date_from: "2021-04-01 00:00:00"
-  date_until: "2024-12-31 23:59:59"
+  date_from: "2022-04-01 00:00:00"
+  date_until: "2024-12-01 00:00:00"
 
 # Performance Settings
 performance:
@@ -41,4 +41,4 @@ behavior:
 
 # Data Source
 data_source:
-  input_file: "latest_filtered.csv"  # Default APK list file
+  input_file: "latest.csv"     # Default APK list file
