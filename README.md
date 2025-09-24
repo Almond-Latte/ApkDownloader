@@ -37,6 +37,7 @@ git clone https://github.com/Almond-Latte/ApkDownloader.git
 cd ApkDownloader
 uv sync
 cp .env.sample .env
+cp config.yaml.example config.yaml
 ```
 
 ### Using pip
@@ -45,6 +46,7 @@ git clone https://github.com/Almond-Latte/ApkDownloader.git
 cd ApkDownloader
 pip install -r requirements.txt
 cp .env.sample .env
+cp config.yaml.example config.yaml
 ```
 
 ## 🔑 Configuration
@@ -61,13 +63,7 @@ API_KEY = 'YOUR_ANDROZOO_API_KEY'
 > If you don't have an AndroZoo API Key, obtain one by following [AndroZoo Access](https://androzoo.uni.lu/access).
 
 ### 2. Configuration File Setup
-Copy the example configuration file and customize it:
-
-```bash
-cp config.yaml.example config.yaml
-```
-
-Edit `config.yaml` to customize the default settings:
+The configuration file was already created during installation. Edit `config.yaml` to customize the default settings:
 
 ```yaml
 # config.yaml
@@ -94,7 +90,8 @@ behavior:
 ```
 
 > [!IMPORTANT]
-> There are restrictions on the number of parallel downloads. Be careful not to overload AndroZoo. Please check the [AndroZoo API Documentation](https://androzoo.uni.lu/api_doc).
+> - `config.yaml` is required for the application to run. The application will not start without it.
+> - There are restrictions on the number of parallel downloads. Be careful not to overload AndroZoo. Please check the [AndroZoo API Documentation](https://androzoo.uni.lu/api_doc).
 
 ## ▶ Execution
 
