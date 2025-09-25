@@ -22,11 +22,13 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
+    DownloadColumn,
     Progress,
     SpinnerColumn,
     TaskID,
     TextColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
     TransferSpeedColumn,
 )
 from rich.spinner import Spinner
@@ -296,9 +298,9 @@ class ApkDownloader:
             TextColumn("[bold blue]{task.fields[filename]}", justify="right"), # Expects task.fields['filename']
             BarColumn(),
             "[progress.percentage]{task.percentage:>3.1f}%",
-            TextColumn("[green]{task.completed}/{task.total}", justify="right"),
-            TransferSpeedColumn(),
-            TimeElapsedColumn(),
+            DownloadColumn(),  # Automatically formats bytes to MB/GB
+            TransferSpeedColumn(),  # Shows speed in appropriate units
+            TimeRemainingColumn(),  # Shows estimated time remaining
             TextColumn("{task.fields[status_text]}"), # Expects task.fields['status_text']
             console=self.console
         )
@@ -878,9 +880,9 @@ class ApkDownloader:
         display_filename_for_progress = f"{display_sha_part}..." if len(expected_sha256) > self.FILENAME_DISPLAY_MAX_LEN else expected_sha256
 
 
-        # Initial update of filename in task fields and set a preparing status.
-        if download_progress and expected_sha256: 
-            download_progress.update(task_id, filename=display_filename_for_progress, status_text="[cyan]Preparing...[/cyan]")
+        # Initial update but keep hidden until actual download
+        if download_progress and expected_sha256:
+            download_progress.update(task_id, filename=display_filename_for_progress, status_text="[grey50]Waiting...[/grey50]", visible=False)
 
 
         if not expected_sha256:
@@ -943,7 +945,9 @@ class ApkDownloader:
 
         if logger: logger.info(f"Attempting download: {expected_sha256} to {download_file_path}")
         if download_progress:
-            download_progress.update(task_id, status_text="[cyan]Downloading...[/cyan]")
+            # ここで初めて表示し、説明を設定
+            download_progress.update(task_id, description="Downloading", visible=True, status_text="[cyan]Downloading...[/cyan]")
+            download_progress.start_task(task_id)  # タイマー開始
 
         params = {"apikey": self.api_key, "sha256": expected_sha256}
         success = False
@@ -1103,10 +1107,30 @@ class ApkDownloader:
             tasks_added = False
             if download_progress:
                 try:
-                    # Add status_text to summary tasks
-                    overall_apk_progress = download_progress.add_task("[white]Overall Download:", filename="", total=total_files, status_text="")
-                    cleanware_progress = download_progress.add_task("[green]Cleanware:", filename="", total=len(cleanware_list), status_text="")
-                    malware_progress = download_progress.add_task("[red]Malware:", filename="", total=len(malware_list), status_text="") # Changed color for malware summary
+                    # Calculate total bytes for progress display
+                    total_cleanware_bytes = sum(int(item.get("apk_size", 0)) for item in cleanware_list)
+                    total_malware_bytes = sum(int(item.get("apk_size", 0)) for item in malware_list)
+                    total_bytes = total_cleanware_bytes + total_malware_bytes
+
+                    # Add summary tasks - Rich will automatically format byte sizes
+                    overall_apk_progress = download_progress.add_task(
+                        "[white]Overall Download:",
+                        filename="",
+                        total=total_bytes,
+                        status_text=f"[cyan]{total_files} files[/cyan]"
+                    )
+                    cleanware_progress = download_progress.add_task(
+                        "[green]Cleanware:",
+                        filename="",
+                        total=total_cleanware_bytes,
+                        status_text=f"[cyan]{len(cleanware_list)} files[/cyan]"
+                    )
+                    malware_progress = download_progress.add_task(
+                        "[red]Malware:",
+                        filename="",
+                        total=total_malware_bytes,
+                        status_text=f"[cyan]{len(malware_list)} files[/cyan]"
+                    )
                     tasks_added = True
                 except Exception as e:
                     if logger: logger.error(f"Failed to add download progress tasks: {e}")
@@ -1127,10 +1151,11 @@ class ApkDownloader:
                         display_filename = f"{display_sha_part}..." if len(sha) > self.FILENAME_DISPLAY_MAX_LEN else sha
                         
                         tid = download_progress.add_task(
-                            "Queued", 
-                            filename=display_filename, # 短縮したファイル名を使用
-                            visible=False, 
-                            start=False, 
+                            "",  # 空の説明でスペースを最小化
+                            filename=display_filename,
+                            total=json_data.get("apk_size", 0),  # Individual file size in bytes
+                            visible=False,  # ダウンロード開始まで非表示
+                            start=False,
                             status_text="Queued"
                         )
                         future = executor.submit(self.download_handler, json_data, tid, clean_dir)
@@ -1144,10 +1169,11 @@ class ApkDownloader:
                         display_filename = f"{display_sha_part}..." if len(sha) > self.FILENAME_DISPLAY_MAX_LEN else sha
 
                         tid = download_progress.add_task(
-                            "Queued", 
-                            filename=display_filename, # 短縮したファイル名を使用
-                            visible=False, 
-                            start=False, 
+                            "",  # 空の説明でスペースを最小化
+                            filename=display_filename,
+                            total=json_data.get("apk_size", 0),  # Individual file size in bytes
+                            visible=False,  # ダウンロード開始まで非表示
+                            start=False,
                             status_text="Queued"
                         )
                         future = executor.submit(self.download_handler, json_data, tid, mal_dir)
@@ -1188,9 +1214,27 @@ class ApkDownloader:
                     n_finished = len(completed_futures)
 
                     if download_progress:
-                         if overall_apk_progress is not None: download_progress.update(overall_apk_progress, completed=n_finished)
-                         if cleanware_progress is not None: download_progress.update(cleanware_progress, completed=sum(f.done() for f in cleanware_futures))
-                         if malware_progress is not None: download_progress.update(malware_progress, completed=sum(f.done() for f in malware_futures))
+                        # Track completed bytes (simplified with safe result check)
+                        def get_completed_bytes(futures_list, data_list):
+                            total = 0
+                            for i, f in enumerate(futures_list):
+                                if f.done():
+                                    try:
+                                        if f.result() == True:
+                                            total += int(data_list[i].get("apk_size", 0))
+                                    except:
+                                        pass
+                            return total
+
+                        cleanware_bytes = get_completed_bytes(cleanware_futures, cleanware_list)
+                        malware_bytes = get_completed_bytes(malware_futures, malware_list)
+
+                        if overall_apk_progress is not None:
+                            download_progress.update(overall_apk_progress, completed=cleanware_bytes + malware_bytes)
+                        if cleanware_progress is not None:
+                            download_progress.update(cleanware_progress, completed=cleanware_bytes)
+                        if malware_progress is not None:
+                            download_progress.update(malware_progress, completed=malware_bytes)
 
                     # --- 完了したタスクの自動非表示 ---
                     if download_progress:
@@ -1206,14 +1250,7 @@ class ApkDownloader:
 
                 # --- Final Update After Loop (inside 'with' block) ---
                 if logger: logger.info("Download monitoring loop finished.")
-                final_clean_done = sum(f.done() for f in cleanware_futures)
-                final_mal_done = sum(f.done() for f in malware_futures)
-                final_overall_done = final_clean_done + final_mal_done
-                if download_progress:
-                    if overall_apk_progress is not None: download_progress.update(overall_apk_progress, completed=final_overall_done)
-                    if cleanware_progress is not None: download_progress.update(cleanware_progress, completed=final_clean_done)
-                    if malware_progress is not None: download_progress.update(malware_progress, completed=final_mal_done)
-                if logger: logger.info(f"Final check: {final_overall_done}/{total_files} tasks marked as done.")
+                # Keep the final update minimal since we're already tracking bytes in the loop
             
             # --- Set Final Status based on results (after 'with' block, but still in 'try') ---
             successful_downloads = 0
