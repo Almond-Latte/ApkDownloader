@@ -1291,8 +1291,9 @@ def download(
     date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold for malware candidates (0-100)"),
-    random_seed: Optional[int] = typer.Option(settings.RANDOM_SEED, help="Seed for random number generation to ensure reproducibility. If None, seed is not fixed."), # Add random_seed option
+    random_seed: Optional[int] = typer.Option(settings.RANDOM_SEED, help="Seed for random number generation to ensure reproducibility. If None, seed is not fixed."),
     verify_hash: bool = typer.Option(settings.VERIFY_EXISTING_FILE_HASH, help="Verify hash of existing files. If False, existing files are skipped without verification."),
+    export_hashes: Optional[Path] = typer.Option(None, help="Export hash lists to directory (creates cleanware.txt and malware.txt)"),
 ):
     """Download APK files based on the specified criteria."""
 
@@ -1362,11 +1363,34 @@ def download(
 
     # Start the hash collection process
     cleanware_list, malware_list = downloader.collect_apk_hashes()
-    
+
+    # Export hash lists if requested
+    if export_hashes and (cleanware_list or malware_list):
+        console.print(f"\n[bold cyan]Exporting hash lists to {export_hashes}...[/bold cyan]")
+
+        # Create directory if it doesn't exist
+        export_hashes.mkdir(parents=True, exist_ok=True)
+
+        # Export malware hashes
+        if malware_list:
+            malware_file = export_hashes / "malware.txt"
+            with open(malware_file, 'w') as f:
+                for item in malware_list:
+                    f.write(f"{item.get('sha256', '')}\n")
+            console.print(f"[green]Exported {len(malware_list)} malware hashes to {malware_file}[/green]")
+
+        # Export cleanware hashes
+        if cleanware_list:
+            cleanware_file = export_hashes / "cleanware.txt"
+            with open(cleanware_file, 'w') as f:
+                for item in cleanware_list:
+                    f.write(f"{item.get('sha256', '')}\n")
+            console.print(f"[green]Exported {len(cleanware_list)} cleanware hashes to {cleanware_file}[/green]")
+
     if cleanware_list or malware_list:
         # Calculate total download size
         downloader.calculate_total_download_size()
-        
+
         # Start downloading the selected APKs
         downloader.download_apks(cleanware_list, malware_list)
 
@@ -1379,7 +1403,7 @@ def survey(
     date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold (0-100)"),
-    export_hashes: Optional[Path] = typer.Option(None, help="Export hash list to CSV file"),
+    export_hashes: Optional[Path] = typer.Option(None, help="Export hash lists to directory (creates cleanware.txt and malware.txt)"),
     show_distribution: bool = typer.Option(True, help="Show temporal distribution of samples"),
     distribution_granularity: str = typer.Option("year", help="Distribution granularity: year, quarter, or month"),
 ):
@@ -1568,28 +1592,26 @@ def survey(
         if export_hashes:
             console.print(f"\n[bold cyan]Exporting hash lists to {export_hashes}...[/bold cyan]")
 
+            # Create directory if it doesn't exist
+            export_hashes.mkdir(parents=True, exist_ok=True)
+
             # Sample the data
-            sampled_malware = malware_df.sample(n=min(n_malware, len(malware_df)), shuffle=True)
-            sampled_cleanware = cleanware_df.sample(n=min(n_cleanware, len(cleanware_df)), shuffle=True)
+            sampled_malware = malware_df.sample(n=min(n_malware, len(malware_df)), shuffle=True, seed=random_seed)
+            sampled_cleanware = cleanware_df.sample(n=min(n_cleanware, len(cleanware_df)), shuffle=True, seed=random_seed)
 
-            # Combine and add labels
-            export_df = pl.concat([
-                sampled_malware.with_columns(pl.lit("malware").alias("classification")),
-                sampled_cleanware.with_columns(pl.lit("cleanware").alias("classification"))
-            ])
+            # Export malware hashes
+            malware_file = export_hashes / "malware.txt"
+            with open(malware_file, 'w') as f:
+                for sha in sampled_malware["sha256"].to_list():
+                    f.write(f"{sha}\n")
+            console.print(f"[green]Exported {len(sampled_malware)} malware hashes to {malware_file}[/green]")
 
-            # Select relevant columns and export
-            export_df = export_df.select([
-                "sha256",
-                "classification",
-                "vt_detection",
-                "vt_scan_date",
-                "apk_size",
-                "pkg_name"
-            ])
-
-            export_df.write_csv(export_hashes)
-            console.print(f"[green]Successfully exported {len(export_df)} hash entries to {export_hashes}[/green]")
+            # Export cleanware hashes
+            cleanware_file = export_hashes / "cleanware.txt"
+            with open(cleanware_file, 'w') as f:
+                for sha in sampled_cleanware["sha256"].to_list():
+                    f.write(f"{sha}\n")
+            console.print(f"[green]Exported {len(sampled_cleanware)} cleanware hashes to {cleanware_file}[/green]")
 
         # Size estimation
         console.print("\n[bold cyan]Estimated Download Size:[/bold cyan]\n")
