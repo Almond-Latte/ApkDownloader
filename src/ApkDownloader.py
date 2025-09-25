@@ -923,7 +923,13 @@ class ApkDownloader:
                 if logger:
                     logger.info(f"File {filename.name} already exists. Verifying hash...")
                 if download_progress:
-                    download_progress.update(task_id, status_text="[cyan]Verifying existing...[/cyan]") 
+                    download_progress.update(
+                        task_id,
+                        visible=True,  # Show during verification
+                        description="Checking",
+                        status_text="[cyan]Verifying existing...[/cyan]"
+                    )
+                    download_progress.start_task(task_id) 
 
                 calculated_sha256 = calculate_sha256(download_file_path)
                 if calculated_sha256 == expected_sha256:
@@ -934,9 +940,12 @@ class ApkDownloader:
                             task_id,
                             completed=file_size,
                             total=file_size,
-                            status_text="[green]Exists & Verified[/green]", 
-                            completion_time=time.time() # Record completion time
+                            visible=True,  # Show the task to display status
+                            description="Skipped",
+                            status_text="[green]Exists & Verified[/green]",
+                            completion_time=time.time()
                         )
+                        download_progress.start_task(task_id)  # Start to show it briefly
                     return True
                 else:
                     if logger: logger.warning(f"Hash mismatch for existing file {filename.name} (Expected: {expected_sha256}, Got: {calculated_sha256}). Will attempt re-download.")
@@ -955,9 +964,12 @@ class ApkDownloader:
                         task_id,
                         completed=file_size,
                         total=file_size,
+                        visible=True,  # Show the task to display status
+                        description="Skipped",
                         status_text="[green]Exists (No Verify)[/green]",
-                        completion_time=time.time() # Record completion time
+                        completion_time=time.time()
                     )
+                    download_progress.start_task(task_id)  # Start to show it briefly
                 return True # Skip download if file exists and verification is off
 
         if logger: logger.info(f"Attempting download: {expected_sha256} to {download_file_path}")
