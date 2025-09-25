@@ -894,9 +894,7 @@ class ApkDownloader:
 
         if event and event.is_set():
             if logger: logger.info(f"Download cancelled for {expected_sha256[:12]}... due to termination signal.")
-            if download_progress:
-                # Set completion_time for interrupted tasks as well for auto-hide
-                download_progress.update(task_id, visible=True, status_text="[yellow]Cancelled[/yellow]", completion_time=time.time()) 
+            # Don't show cancelled tasks at all - they stay hidden
             return False
 
         download_file_path = download_dir / filename 
@@ -1192,6 +1190,12 @@ class ApkDownloader:
                 while len(completed_futures) < len(all_futures):
                     if event and event.is_set():
                         if logger: logger.warning("Interrupt signal received during downloads. Stopping monitoring.")
+                        # Hide all queued (not yet started) tasks before cancelling
+                        if download_progress:
+                            for task in download_progress.tasks:
+                                # Hide tasks that never started (description is empty and status is "Queued")
+                                if task.fields.get("status_text") == "Queued" and task.description == "":
+                                    download_progress.update(task.id, visible=False)
                         for f_cancel in all_futures: # Use a different variable name
                             if not f_cancel.done():
                                 f_cancel.cancel()
