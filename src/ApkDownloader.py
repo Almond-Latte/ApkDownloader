@@ -48,8 +48,16 @@ app = typer.Typer(
 # --- ApkDownloader Class ---
 class ApkDownloader:
     """Handles the process of collecting APK hashes and downloading APK files."""
+    # Display constants
     HIDE_COMPLETED_TASK_DELAY = 5.0  # Seconds to hide task after completion
     FILENAME_DISPLAY_MAX_LEN = 8     # Max length of SHA part for filename display
+    SHA_DISPLAY_LEN = 12              # Length for SHA in error messages
+
+    # Download constants
+    CHUNK_SIZE = 64 * 1024           # 64KB chunks for download
+    CONNECT_TIMEOUT = 10              # Connection timeout in seconds
+    READ_TIMEOUT = 60                 # Read timeout in seconds
+    MONITOR_INTERVAL = 0.5            # Progress monitoring interval in seconds
 
     def __init__(
         self,
@@ -861,7 +869,18 @@ class ApkDownloader:
             if logger: logger.exception(f"Unexpected error during size estimation: {e}")
             self.console.print(f"[bold red]Unexpected error during size estimation:[/bold red] {e}")
 
-    def download_handler( self, json_data: Json, task_id: TaskID, download_dir: Path) -> bool:
+    def _handle_download_error(self, logger, download_progress, task_id: TaskID, sha256: str, error_type: str, exception: Exception, use_exception: bool = False) -> None:
+        """Unified error handling for download failures."""
+        if logger:
+            if use_exception:
+                logger.exception(f"{error_type} during download of {sha256}: {exception}")
+            else:
+                logger.error(f"{error_type} during download of {sha256}: {exception}")
+        self.console.log(f"[bold red]{error_type} ({sha256[:self.SHA_DISPLAY_LEN]}...):[/bold red] {exception}")
+        if download_progress:
+            download_progress.update(task_id, status_text=f"[red]{error_type}[/red]", completion_time=time.time())
+
+    def download_handler(self, json_data: Json, task_id: TaskID, download_dir: Path) -> bool:
         """Downloads a single APK file identified by its SHA256 hash and verifies it."""
         logger = getattr(self, 'logger', None)
         event = getattr(self, 'event', None)
@@ -893,7 +912,7 @@ class ApkDownloader:
             return False
 
         if event and event.is_set():
-            if logger: logger.info(f"Download cancelled for {expected_sha256[:12]}... due to termination signal.")
+            if logger: logger.info(f"Download cancelled for {expected_sha256[:self.SHA_DISPLAY_LEN]}... due to termination signal.")
             # Don't show cancelled tasks at all - they stay hidden
             return False
 
@@ -949,13 +968,12 @@ class ApkDownloader:
 
         params = {"apikey": self.api_key, "sha256": expected_sha256}
         success = False
-        response = None
-        file_handle = None
         bytes_downloaded = 0
-        # calculated_sha256 = "" # This variable is defined later, no need to pre-define here
+        file_handle = None
+        response = None
 
         try:
-            response = requests.get(self.url, params=params, stream=True, timeout=(10, 60))
+            response = requests.get(self.url, params=params, stream=True, timeout=(self.CONNECT_TIMEOUT, self.READ_TIMEOUT))
             response.raise_for_status()
             
             content_length_str = response.headers.get("content-length")
@@ -964,42 +982,36 @@ class ApkDownloader:
             if download_progress:
                  download_progress.update(task_id, total=data_size, completed=0, visible=True, status_text="[cyan]Downloading...[/cyan]")
 
-            chunk_size = 64 * 1024  # 64KB chunks
+            chunk_size = self.CHUNK_SIZE
             download_dir.mkdir(parents=True, exist_ok=True)
             file_handle = download_file_path.open(mode="wb")
             
             for chunk_idx, chunk in enumerate(response.iter_content(chunk_size=chunk_size)):
                 if event and event.is_set():
-                    if logger: logger.info(f"Task {task_id}: Download of {expected_sha256} interrupted by event.")
                     if download_progress:
                         download_progress.update(task_id, status_text="[yellow]Interrupted[/yellow]", completion_time=time.time())
-                    success = False
-                    break
-                if chunk:  # filter out keep-alive new chunks
+                    break  # success is already False
+                if chunk:
                     file_handle.write(chunk)
                     bytes_downloaded += len(chunk)
                     if download_progress:
                         download_progress.update(task_id, advance=len(chunk))
 
-            else: # for-else: executes if the loop completed without a break
-                # Check if download was successful based on bytes downloaded vs expected
-                if data_size > 0 and bytes_downloaded == data_size:
-                    success = True
-                elif data_size == 0 and bytes_downloaded > 0: # Content-Length was 0, but data was received
-                    success = True
-                    if download_progress:
-                        if logger: logger.info(f"Task {task_id}: Content-Length was 0, but {bytes_downloaded} bytes downloaded. Updating total for {expected_sha256}.")
-                        download_progress.update(task_id, total=bytes_downloaded) # Update total to actual downloaded size
-                elif data_size > 0 and bytes_downloaded < data_size and not (event and event.is_set()):
-                    if logger: logger.warning(f"Task {task_id}: Download incomplete for {expected_sha256}. Expected {data_size}, got {bytes_downloaded}.")
+            else:  # Loop completed without interruption
+                # Validate download completion
+                if bytes_downloaded > 0:
+                    if data_size == 0:  # No Content-Length header
+                        success = True
+                        if download_progress:
+                            download_progress.update(task_id, total=bytes_downloaded)
+                    else:
+                        success = (bytes_downloaded == data_size)
+                        if not success and logger:
+                            logger.warning(f"Download incomplete for {expected_sha256}: {bytes_downloaded}/{data_size} bytes")
+                else:
                     success = False
-                elif bytes_downloaded == 0 and data_size > 0: # No bytes downloaded but expected some
-                     if logger: logger.warning(f"Task {task_id}: No bytes downloaded for {expected_sha256}, but expected {data_size}.")
-                     success = False
-                # If event was set, success should already be False from the break
-            
-            # If the loop was broken by event, success is already False.
-            # If the loop completed but success is still not True (e.g. size mismatch), it remains False.
+                    if data_size > 0 and logger:
+                        logger.warning(f"No bytes downloaded for {expected_sha256}, expected {data_size}")
 
             if file_handle is not None and not file_handle.closed:
                 file_handle.close()
@@ -1007,49 +1019,34 @@ class ApkDownloader:
                 response.close()
 
             if success:
-                if logger: logger.info(f"Download complete for {expected_sha256}. Verifying hash...")
                 if download_progress:
                     download_progress.update(task_id, status_text="[cyan]Verifying hash...[/cyan]") 
 
                 calculated_sha256 = calculate_sha256(download_file_path)
                 if calculated_sha256 == expected_sha256:
-                    if logger: logger.info(f"Hash verification successful for {expected_sha256}.")
                     if download_progress:
-                        # Mark as verified and set completion time
-                        download_progress.update(task_id, status_text="[green]Verified[/green]", completion_time=time.time()) 
+                        download_progress.update(task_id, status_text="[green]Verified[/green]", completion_time=time.time())
                 else:
-                    if logger: logger.error(f"Hash mismatch for {expected_sha256}. Expected: {expected_sha256}, Got: {calculated_sha256}")
+                    success = False
+                    if logger:
+                        logger.error(f"Hash mismatch for {expected_sha256}: got {calculated_sha256}")
                     if download_progress:
                         download_progress.update(task_id, status_text="[red]Hash Mismatch![/red]", completion_time=time.time())
-                    success = False
-            elif not (event and event.is_set()): # If download loop didn't set success and not interrupted
-                 if logger: logger.error(f"Download failed for {expected_sha256} before hash verification stage.")
-                 if download_progress:
-                     download_progress.update(task_id, status_text="[red]Download Failed[/red]", completion_time=time.time()) 
+            elif not (event and event.is_set()):
+                if download_progress:
+                    download_progress.update(task_id, status_text="[red]Download Failed[/red]", completion_time=time.time()) 
 
         except requests.exceptions.Timeout as e:
-            if logger:
-                logger.error(f"Timeout during download of {expected_sha256}: {e}")
-            self.console.log(f"[bold red]Timeout ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Timeout[/red]", completion_time=time.time()) 
+            self._handle_download_error(logger, download_progress, task_id, expected_sha256, "Timeout", e)
             success = False
         except requests.exceptions.RequestException as e:
-            if logger:
-                logger.error(f"RequestException during download of {expected_sha256}: {e}")
-            self.console.log(f"[bold red]Download Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Request Error[/red]", completion_time=time.time()) 
+            self._handle_download_error(logger, download_progress, task_id, expected_sha256, "Request Error", e)
             success = False
         except IOError as e:
-            if logger:
-                logger.error(f"IOError during download of {expected_sha256}: {e}")
-            self.console.log(f"[bold red]File Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]File Error[/red]", completion_time=time.time()) 
+            self._handle_download_error(logger, download_progress, task_id, expected_sha256, "File Error", e)
             success = False
         except Exception as e:
-            if logger:
-                logger.exception(f"Unexpected error during download of {expected_sha256}: {e}")
-            self.console.log(f"[bold red]Unexpected Error ({expected_sha256[:12]}...):[/bold red] {e}")
-            if download_progress: download_progress.update(task_id, status_text="[red]Unexpected Error[/red]", completion_time=time.time()) 
+            self._handle_download_error(logger, download_progress, task_id, expected_sha256, "Unexpected Error", e, use_exception=True)
             success = False
         finally:
             if file_handle is not None and not file_handle.closed:
@@ -1225,7 +1222,7 @@ class ApkDownloader:
                                 download_progress.update(task.id, visible=False)
                     
                     self._refresh_live_display(download_panel=True)
-                    time.sleep(0.5)
+                    time.sleep(self.MONITOR_INTERVAL)
 
                 if logger: logger.info("Download monitoring loop finished.")
             
