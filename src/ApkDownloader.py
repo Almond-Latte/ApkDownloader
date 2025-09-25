@@ -1299,6 +1299,27 @@ def download(
 
     console: Console = Console()
 
+    # Display configuration settings
+    console.print("\n[bold cyan]Download Configuration:[/bold cyan]")
+    config_table = Table(box=box.ROUNDED, show_header=False)
+    config_table.add_column("Parameter", style="cyan")
+    config_table.add_column("Value", style="yellow")
+
+    config_table.add_row("APK List", str(apk_list))
+    config_table.add_row("Download Directory", str(download_dir))
+    config_table.add_row("Cleanware Samples", f"{n_cleanware:,}")
+    config_table.add_row("Malware Samples", f"{n_malware:,}")
+    config_table.add_row("Date Range", f"{date_start} to {date_end}")
+    config_table.add_row("Malware Threshold", f"{malware_threshold}")
+    config_table.add_row("Hash Verification", "Enabled" if verify_hash else "Disabled")
+    config_table.add_row("Random Seed", str(random_seed) if random_seed else "Not set")
+    config_table.add_row("Concurrent Downloads", str(settings.CONCURRENT_DOWNLOADS))
+    if export_hashes:
+        config_table.add_row("Export Hashes To", str(export_hashes))
+
+    console.print(config_table)
+    console.print()
+
     # --- Handle CSV to Feather conversion with validation ---
     processed_apk_list_path = apk_list
     if apk_list.suffix.lower() == ".csv":
@@ -1416,6 +1437,26 @@ def survey(
     """
 
     console: Console = Console()
+
+    # Display configuration settings
+    console.print("\n[bold cyan]Survey Configuration:[/bold cyan]")
+    config_table = Table(box=box.ROUNDED, show_header=False)
+    config_table.add_column("Parameter", style="cyan")
+    config_table.add_column("Value", style="yellow")
+
+    config_table.add_row("APK List", str(apk_list))
+    config_table.add_row("Cleanware Samples", f"{n_cleanware:,}")
+    config_table.add_row("Malware Samples", f"{n_malware:,}")
+    config_table.add_row("Date Range", f"{date_start} to {date_end}")
+    config_table.add_row("Malware Threshold", f"{malware_threshold}")
+    config_table.add_row("Random Seed", str(random_seed) if random_seed else "Not set")
+    if export_hashes:
+        config_table.add_row("Export Hashes To", str(export_hashes))
+    if show_distribution:
+        config_table.add_row("Distribution", f"Show by {distribution_granularity}")
+
+    console.print(config_table)
+    console.print()
 
     # Handle CSV to Feather conversion with validation
     processed_apk_list_path = apk_list
