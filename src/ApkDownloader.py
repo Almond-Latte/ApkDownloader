@@ -959,22 +959,10 @@ class ApkDownloader:
             response.raise_for_status()
             
             content_length_str = response.headers.get("content-length")
-            if logger:
-                logger.info(f"Task {task_id}: Received Content-Length header for {expected_sha256}: '{content_length_str}'")
-
-            if content_length_str is not None and content_length_str.isdigit():
-                data_size = int(content_length_str)
-            else:
-                data_size = 0 # If header is missing or not a number, default to 0.
-                if logger:
-                    logger.warning(f"Task {task_id}: Content-Length for {expected_sha256} is missing or invalid ('{content_length_str}'). Download speed may not be shown accurately.")
+            data_size = int(content_length_str) if content_length_str and content_length_str.isdigit() else 0
 
             if download_progress:
-                 if logger: 
-                     logger.info(f"Task {task_id}: Updating total to {data_size} for {expected_sha256}.")
                  download_progress.update(task_id, total=data_size, completed=0, visible=True, status_text="[cyan]Downloading...[/cyan]")
-            else:
-                if logger: logger.warning(f"Task {task_id}: download_progress is None, cannot update total for {expected_sha256}")
 
             chunk_size = 64 * 1024  # 64KB chunks
             download_dir.mkdir(parents=True, exist_ok=True)
@@ -1064,20 +1052,17 @@ class ApkDownloader:
             if download_progress: download_progress.update(task_id, status_text="[red]Unexpected Error[/red]", completion_time=time.time()) 
             success = False
         finally:
-            # Status text should be set by specific conditions above.
-            # No generic status update needed here unless a default is desired.
-
             if file_handle is not None and not file_handle.closed:
                 file_handle.close()
             if response is not None:
                 response.close()
 
             if not success and download_file_path.exists():
-                if logger: logger.warning(f"Download/Verification failed for {expected_sha256}. Deleting incomplete/corrupt file: {download_file_path}")
                 try:
                     download_file_path.unlink()
-                except OSError as e:
-                    if logger: logger.error(f"Failed to delete incomplete/corrupt file {download_file_path}: {e}")
+                    if logger: logger.debug(f"Deleted incomplete file: {download_file_path}")
+                except OSError:  # Ignore deletion errors
+                    pass
 
         return success
 
@@ -1142,48 +1127,38 @@ class ApkDownloader:
                 mal_dir = self.download_dir / "malware"
 
                 if tasks_added and download_progress:
+                    # Helper function to reduce code duplication
+                    def create_download_task(json_data, target_dir, futures_list):
+                        sha = str(json_data.get("sha256", "unknown"))
+                        display_sha = sha[:self.FILENAME_DISPLAY_MAX_LEN]
+                        display_filename = f"{display_sha}..." if len(sha) > self.FILENAME_DISPLAY_MAX_LEN else sha
+
+                        tid = download_progress.add_task(
+                            "",
+                            filename=display_filename,
+                            total=json_data.get("apk_size", 0),
+                            visible=False,
+                            start=False,
+                            status_text="Queued"
+                        )
+                        future = executor.submit(self.download_handler, json_data, tid, target_dir)
+                        futures_list.append(future)
+                        future_to_sha[future] = sha
+
+                    # Process cleanware
                     for json_data in cleanware_list:
-                        sha = str(json_data.get("sha256", "unknown"))
-                        # プログレスバー表示用の短縮ファイル名
-                        display_sha_part = sha[:self.FILENAME_DISPLAY_MAX_LEN]
-                        display_filename = f"{display_sha_part}..." if len(sha) > self.FILENAME_DISPLAY_MAX_LEN else sha
-                        
-                        tid = download_progress.add_task(
-                            "",  # 空の説明でスペースを最小化
-                            filename=display_filename,
-                            total=json_data.get("apk_size", 0),  # Individual file size in bytes
-                            visible=False,  # ダウンロード開始まで非表示
-                            start=False,
-                            status_text="Queued"
-                        )
-                        future = executor.submit(self.download_handler, json_data, tid, clean_dir)
-                        cleanware_futures.append(future)
-                        future_to_sha[future] = sha
+                        create_download_task(json_data, clean_dir, cleanware_futures)
 
+                    # Process malware
                     for json_data in malware_list:
-                        sha = str(json_data.get("sha256", "unknown"))
-                        # プログレスバー表示用の短縮ファイル名
-                        display_sha_part = sha[:self.FILENAME_DISPLAY_MAX_LEN]
-                        display_filename = f"{display_sha_part}..." if len(sha) > self.FILENAME_DISPLAY_MAX_LEN else sha
-
-                        tid = download_progress.add_task(
-                            "",  # 空の説明でスペースを最小化
-                            filename=display_filename,
-                            total=json_data.get("apk_size", 0),  # Individual file size in bytes
-                            visible=False,  # ダウンロード開始まで非表示
-                            start=False,
-                            status_text="Queued"
-                        )
-                        future = executor.submit(self.download_handler, json_data, tid, mal_dir)
-                        malware_futures.append(future)
-                        future_to_sha[future] = sha
+                        create_download_task(json_data, mal_dir, malware_futures)
                 else:
                     self.console.log("[bold red]Cannot proceed with downloads as progress task setup failed.[/bold red]")
                     self.progress_manager.complete_task(TaskCode.DOWNLOAD_APKS, StatusCode.ERROR, error=Exception("Progress task setup failed"))
                     return
 
-                all_futures = cleanware_futures + malware_futures # Corrected typo here
-                completed_futures = set() # Ensure completed_futures is initialized before the loop
+                all_futures = cleanware_futures + malware_futures
+                completed_futures = set()
                 self._refresh_live_display(download_panel=True) 
 
                 # --- Monitor Progress ---
@@ -1196,23 +1171,22 @@ class ApkDownloader:
                                 # Hide tasks that never started (description is empty and status is "Queued")
                                 if task.fields.get("status_text") == "Queued" and task.description == "":
                                     download_progress.update(task.id, visible=False)
-                        for f_cancel in all_futures: # Use a different variable name
-                            if not f_cancel.done():
-                                f_cancel.cancel()
+                        for future in all_futures:
+                            if not future.done():
+                                future.cancel()
                         break
 
-                    done_futures = {f_done for f_done in all_futures if f_done.done()} # Use a different variable name
+                    done_futures = {f for f in all_futures if f.done()}
                     newly_completed = done_futures - completed_futures
 
                     for future in newly_completed:
                         sha = future_to_sha.get(future, "unknown_sha")
                         try:
                             result = future.result()
-                            if logger:
-                                if result is True: logger.debug(f"Future completed successfully for {sha}")
-                                else: logger.warning(f"Future for {sha} completed but download handler returned {result}.")
-                        except Exception as e_future: # Use a different variable name
-                             if logger: logger.error(f"Future for {sha} completed with an exception: {type(e_future).__name__}.")
+                            if logger and result is not True:
+                                logger.warning(f"Download failed for {sha}: returned {result}")
+                        except Exception as e:
+                             if logger: logger.error(f"Future for {sha} failed: {type(e).__name__}")
 
                     completed_futures.update(newly_completed)
                     n_finished = len(completed_futures)
@@ -1226,8 +1200,8 @@ class ApkDownloader:
                                     try:
                                         if f.result() == True:
                                             total += int(data_list[i].get("apk_size", 0))
-                                    except:
-                                        pass
+                                    except Exception:
+                                        pass  # Skip failed downloads
                             return total
 
                         cleanware_bytes = get_completed_bytes(cleanware_futures, cleanware_list)
@@ -1240,27 +1214,26 @@ class ApkDownloader:
                         if malware_progress is not None:
                             download_progress.update(malware_progress, completed=malware_bytes)
 
-                    # --- 完了したタスクの自動非表示 ---
+                    # Hide completed tasks after delay
                     if download_progress:
                         current_time = time.time()
                         for task in download_progress.tasks:
-                            # 個別のダウンロードタスク（集約タスクではないもの）を確認
-                            if task.visible and task.fields.get("completion_time") and not task.description.startswith(("[white]Overall", "[green]Cleanware", "[red]Malware")):
-                                if current_time - task.fields["completion_time"] > self.HIDE_COMPLETED_TASK_DELAY:
-                                    download_progress.update(task.id, visible=False)
+                            if (task.visible and
+                                task.fields.get("completion_time") and
+                                not task.description.startswith(("[white]Overall", "[green]Cleanware", "[red]Malware")) and
+                                current_time - task.fields["completion_time"] > self.HIDE_COMPLETED_TASK_DELAY):
+                                download_progress.update(task.id, visible=False)
                     
                     self._refresh_live_display(download_panel=True)
-                    time.sleep(0.5) # メインループのポーリング間隔
+                    time.sleep(0.5)
 
-                # --- Final Update After Loop (inside 'with' block) ---
                 if logger: logger.info("Download monitoring loop finished.")
-                # Keep the final update minimal since we're already tracking bytes in the loop
             
             # --- Set Final Status based on results (after 'with' block, but still in 'try') ---
             successful_downloads = 0
             failed_downloads = 0
             # Ensure all_futures is accessible; it should be if defined before 'with' or assigned in all paths within 'with'
-            for future_item in all_futures: # Renamed to avoid conflict if 'future' is from an outer scope
+            for future_item in all_futures:
                 if future_item.done() and not future_item.cancelled():
                     try:
                         if future_item.result() is True:
