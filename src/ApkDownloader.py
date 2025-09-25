@@ -39,25 +39,32 @@ from cache_handler import CacheHandler
 from progress_manager import ProgressManager, StatusCode, TaskCode
 from utils import Json, calculate_sha256, convert_csv_to_feather, make_json_serializable
 
-# Create a Typer app instance for the command-line interface
 app = typer.Typer(
     help="APK Downloader: Analyze and download APK files from AndroZoo. Use 'survey' to analyze before downloading.",
     add_completion=False,
 )
 
-# --- ApkDownloader Class ---
-class ApkDownloader:
-    """Handles the process of collecting APK hashes and downloading APK files."""
-    # Display constants
-    HIDE_COMPLETED_TASK_DELAY = 5.0  # Seconds to hide task after completion
-    FILENAME_DISPLAY_MAX_LEN = 8     # Max length of SHA part for filename display
-    SHA_DISPLAY_LEN = 12              # Length for SHA in error messages
 
-    # Download constants
-    CHUNK_SIZE = 64 * 1024           # 64KB chunks for download
-    CONNECT_TIMEOUT = 10              # Connection timeout in seconds
-    READ_TIMEOUT = 60                 # Read timeout in seconds
-    MONITOR_INTERVAL = 0.5            # Progress monitoring interval in seconds
+class ApkDownloader:
+    """Handles APK collection and download from AndroZoo repository.
+
+    This class manages the entire download pipeline including:
+    - Reading and filtering APK metadata from CSV/Feather files
+    - Sampling based on malware detection scores
+    - Parallel downloading with progress tracking
+    - Hash verification of downloaded files
+    """
+
+    # UI/Display configuration
+    HIDE_COMPLETED_TASK_DELAY = 5.0
+    FILENAME_DISPLAY_MAX_LEN = 8
+    SHA_DISPLAY_LEN = 12
+
+    # Network/Download configuration
+    CHUNK_SIZE = 64 * 1024  # Optimal for 50MB+ files
+    CONNECT_TIMEOUT = 10
+    READ_TIMEOUT = 60
+    MONITOR_INTERVAL = 0.5
 
     def __init__(
         self,
@@ -78,7 +85,7 @@ class ApkDownloader:
         random_seed: Optional[int] = None,
         verify_existing_file_hash: bool = True,
     ) -> None:
-        """Initializes the ApkDownloader with necessary configurations."""
+        """Initialize downloader with configuration and setup signal handlers."""
         super().__init__()
         self.console = console
         self.init_success = True
@@ -299,40 +306,37 @@ class ApkDownloader:
             return logger
 
     def _setup_progress_display(self) -> None:
-        """Sets up the Rich progress display for the download tasks."""
+        """Configure Rich progress bars with automatic size formatting."""
         self.download_progress = Progress(
             TextColumn("[progress.description]{task.description}", justify="right"),
             SpinnerColumn(),
-            TextColumn("[bold blue]{task.fields[filename]}", justify="right"), # Expects task.fields['filename']
+            TextColumn("[bold blue]{task.fields[filename]}", justify="right"),
             BarColumn(),
             "[progress.percentage]{task.percentage:>3.1f}%",
-            DownloadColumn(),  # Automatically formats bytes to MB/GB
-            TransferSpeedColumn(),  # Shows speed in appropriate units
-            TimeRemainingColumn(),  # Shows estimated time remaining
-            TextColumn("{task.fields[status_text]}"), # Expects task.fields['status_text']
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            TextColumn("{task.fields[status_text]}"),
             console=self.console
         )
-        # Setup Live display for overall progress and download progress
         self.live = Live(
             self.generate_table(),
             auto_refresh=True,
-            transient=False, # Keep the final display after exit
+            transient=False,
             console=self.console,
-            vertical_overflow="crop" # How to handle overflow
+            vertical_overflow="crop"
         )
         self.live.start()
     
     def _refresh_live_display(self, download_panel: bool = False) -> None:
-        """Updates the live display table if Live is active and started."""
-        live = getattr(self, 'live', None) # Safely get the live attribute
+        """Update live display if active, with error handling."""
+        live = getattr(self, 'live', None)
         if live and live._started:
             try:
-                # Generate the table layout and update the Live instance
                 live.update(self.generate_table(download_panel=download_panel), refresh=True)
             except Exception as e:
-                # Log error if update fails, using existing logger or a basic one
                 logger = getattr(self, 'logger', None) or getLogger(__name__)
-                logger.error(f"Failed to update live display: {e}", exc_info=False) # Avoid recursive errors in logging
+                logger.error(f"Failed to update live display: {e}", exc_info=False)
 
     def generate_table(self, *, download_panel: bool = False) -> Align:
         """Generates the Rich Table layout for the progress display."""
@@ -426,48 +430,43 @@ class ApkDownloader:
             event.set()
 
     def _make_download_dirs(self) -> None:
-        """Creates the necessary download subdirectories ('cleanware', 'malware').
-        Raises ValueError if download_dir is not set, or OSError on directory creation failure.
+        """Create cleanware/ and malware/ subdirectories for downloads.
+
+        Raises:
+            ValueError: If download_dir is not configured
+            OSError: If directory creation fails
         """
         logger = getattr(self, 'logger', None)
 
         if self.download_dir is None:
-            err_msg = "Download directory (self.download_dir) is not configured. Cannot create subdirectories."
+            err_msg = "Download directory not configured"
             if logger:
                 logger.critical(err_msg)
             self.console.log(f"[bold red]Internal Error:[/bold red] {err_msg}")
             raise ValueError(err_msg)
 
         try:
-            # Create directories, including parents, if they don't exist
             cleanware_dir = self.download_dir / "cleanware"
             malware_dir = self.download_dir / "malware"
-            
+
             cleanware_dir.mkdir(parents=True, exist_ok=True)
             malware_dir.mkdir(parents=True, exist_ok=True)
-            
+
             if logger: logger.info(f"Ensured download directories exist: {cleanware_dir}, {malware_dir}")
         except OSError as e:
-            # Log and report error if directory creation fails
             err_msg = f"Failed to create download directories under {self.download_dir}: {e}"
             if logger: logger.error(err_msg)
             self.console.log(f"[bold red]Error creating download directories:[/bold red] {e}")
-            raise # Re-raise OSError to be caught by the caller
-
-    # Note: has_vt_detection, is_malware, is_within_date_range are kept for potential
-    # compatibility or future use with non-Polars workflows, but are not the primary
-    # filtering mechanism when using Polars with Feather files.
+            raise
 
     @staticmethod
     def has_vt_detection(json_data: Json) -> bool:
-        """Checks if 'vt_detection' key exists and is not empty."""
-        # Primarily relevant for older CSV logic.
+        """Check if APK has VirusTotal detection score."""
         vt_detection_value = json_data.get("vt_detection")
         return vt_detection_value is not None and vt_detection_value != ""
 
     def is_malware(self, json_data: Json) -> bool:
-        """Determines if an APK record represents malware based on the threshold."""
-        # Primarily relevant for older CSV logic.
+        """Classify APK as malware if vt_detection >= threshold."""
         logger = getattr(self, 'logger', None)
         try:
             # Attempt conversion, handle potential None or non-integer strings gracefully
@@ -945,7 +944,7 @@ class ApkDownloader:
                             status_text="[green]Exists & Verified[/green]",
                             completion_time=time.time()
                         )
-                        download_progress.start_task(task_id)  # Start to show it briefly
+                        download_progress.start_task(task_id)
                     return True
                 else:
                     if logger: logger.warning(f"Hash mismatch for existing file {filename.name} (Expected: {expected_sha256}, Got: {calculated_sha256}). Will attempt re-download.")
@@ -969,7 +968,7 @@ class ApkDownloader:
                         status_text="[green]Exists (No Verify)[/green]",
                         completion_time=time.time()
                     )
-                    download_progress.start_task(task_id)  # Start to show it briefly
+                    download_progress.start_task(task_id)
                 return True # Skip download if file exists and verification is off
 
         if logger: logger.info(f"Attempting download: {expected_sha256} to {download_file_path}")
@@ -1076,7 +1075,11 @@ class ApkDownloader:
         return success
 
     def download_apks(self, cleanware_list: List[Json], malware_list: List[Json]) -> None:
-        """Downloads the selected cleanware and malware APKs concurrently using a thread pool."""
+        """Execute parallel downloads with progress tracking.
+
+        Uses ThreadPoolExecutor for concurrent downloads up to concurrent_downloads limit.
+        Monitors progress and handles interruption via signal handler.
+        """
         if not self.progress_manager.start_task(TaskCode.DOWNLOAD_APKS, f"Starting download of {len(cleanware_list + malware_list)} files..."):
             return
         
@@ -1099,12 +1102,10 @@ class ApkDownloader:
             tasks_added = False
             if download_progress:
                 try:
-                    # Calculate total bytes for progress display
+                    # Calculate totals for accurate progress display
                     total_cleanware_bytes = sum(int(item.get("apk_size", 0)) for item in cleanware_list)
                     total_malware_bytes = sum(int(item.get("apk_size", 0)) for item in malware_list)
                     total_bytes = total_cleanware_bytes + total_malware_bytes
-
-                    # Add summary tasks - Rich will automatically format byte sizes
                     overall_apk_progress = download_progress.add_task(
                         "[white]Overall Download:",
                         filename="",
@@ -1136,7 +1137,6 @@ class ApkDownloader:
                 mal_dir = self.download_dir / "malware"
 
                 if tasks_added and download_progress:
-                    # Helper function to reduce code duplication
                     def create_download_task(json_data, target_dir, futures_list):
                         sha = str(json_data.get("sha256", "unknown"))
                         display_sha = sha[:self.FILENAME_DISPLAY_MAX_LEN]
