@@ -57,6 +57,7 @@ class ApkDownloader:
 
     # UI/Display configuration
     HIDE_COMPLETED_TASK_DELAY = 5.0
+    HIDE_SKIPPED_TASK_DELAY = 0.5    # Hide skipped files quickly
     FILENAME_DISPLAY_MAX_LEN = 8
     SHA_DISPLAY_LEN = 12
 
@@ -924,27 +925,23 @@ class ApkDownloader:
                 if download_progress:
                     download_progress.update(
                         task_id,
-                        visible=True,  # Show during verification
-                        description="Checking",
-                        status_text="[cyan]Verifying existing...[/cyan]"
-                    )
-                    download_progress.start_task(task_id) 
+                        visible=False,  # Keep hidden during verification too
+                        status_text="[cyan]Verifying...[/cyan]"
+                    ) 
 
                 calculated_sha256 = calculate_sha256(download_file_path)
                 if calculated_sha256 == expected_sha256:
                     if logger: logger.info(f"Hash match for existing file {filename.name}. Skipping download.")
+                    # Don't show skipped files in progress bar at all
                     if download_progress:
                         file_size = download_file_path.stat().st_size
                         download_progress.update(
                             task_id,
                             completed=file_size,
                             total=file_size,
-                            visible=True,  # Show the task to display status
-                            description="Skipped",
-                            status_text="[green]Exists & Verified[/green]",
-                            completion_time=time.time()
+                            visible=False,  # Keep hidden for skipped files
+                            status_text="[green]Exists[/green]"
                         )
-                        download_progress.start_task(task_id)
                     return True
                 else:
                     if logger: logger.warning(f"Hash mismatch for existing file {filename.name} (Expected: {expected_sha256}, Got: {calculated_sha256}). Will attempt re-download.")
@@ -957,18 +954,16 @@ class ApkDownloader:
             else: # Hash verification is disabled
                 if logger:
                     logger.info(f"File {filename.name} already exists. Skipping download as hash verification is disabled.")
+                # Don't show skipped files in progress bar at all
                 if download_progress:
                     file_size = download_file_path.stat().st_size
                     download_progress.update(
                         task_id,
                         completed=file_size,
                         total=file_size,
-                        visible=True,  # Show the task to display status
-                        description="Skipped",
-                        status_text="[green]Exists (No Verify)[/green]",
-                        completion_time=time.time()
+                        visible=False,  # Keep hidden for skipped files
+                        status_text="[green]Exists[/green]"
                     )
-                    download_progress.start_task(task_id)
                 return True # Skip download if file exists and verification is off
 
         if logger: logger.info(f"Attempting download: {expected_sha256} to {download_file_path}")
