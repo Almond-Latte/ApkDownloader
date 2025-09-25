@@ -36,6 +36,7 @@ from rich.table import Table
 
 import settings
 from cache_handler import CacheHandler
+from config_manager import ConfigManager, DownloadConfig, SurveyConfig
 from progress_manager import ProgressManager, StatusCode, TaskCode
 from utils import Json, calculate_sha256, convert_csv_to_feather, make_json_serializable
 
@@ -1299,26 +1300,24 @@ def download(
 
     console: Console = Console()
 
-    # Display configuration settings
-    console.print("\n[bold cyan]Download Configuration:[/bold cyan]")
-    config_table = Table(box=box.ROUNDED, show_header=False)
-    config_table.add_column("Parameter", style="cyan")
-    config_table.add_column("Value", style="yellow")
-
-    config_table.add_row("APK List", str(apk_list))
-    config_table.add_row("Download Directory", str(download_dir))
-    config_table.add_row("Cleanware Samples", f"{n_cleanware:,}")
-    config_table.add_row("Malware Samples", f"{n_malware:,}")
-    config_table.add_row("Date Range", f"{date_start} to {date_end}")
-    config_table.add_row("Malware Threshold", f"{malware_threshold}")
-    config_table.add_row("Hash Verification", "Enabled" if verify_hash else "Disabled")
-    config_table.add_row("Random Seed", str(random_seed) if random_seed else "Not set")
-    config_table.add_row("Concurrent Downloads", str(settings.CONCURRENT_DOWNLOADS))
-    if export_hashes:
-        config_table.add_row("Export Hashes To", str(export_hashes))
-
-    console.print(config_table)
-    console.print()
+    # Create and display configuration
+    config = ConfigManager.create_download_config(
+        api_key=api_key,
+        apk_list=apk_list,
+        download_dir=download_dir,
+        n_cleanware=n_cleanware,
+        n_malware=n_malware,
+        date_start=date_start,
+        date_end=date_end,
+        malware_threshold=malware_threshold,
+        verify_hash=verify_hash,
+        random_seed=random_seed,
+        concurrent_downloads=settings.CONCURRENT_DOWNLOADS,
+        cache_dir=Path(settings.CACHE_DIR),
+        log_dir=Path(settings.LOG_DIR),
+        export_hashes=export_hashes
+    )
+    config.display(console)
 
     # --- Handle CSV to Feather conversion with validation ---
     processed_apk_list_path = apk_list
@@ -1355,8 +1354,9 @@ def download(
         raise typer.Exit(code=1)
     # --- End CSV to Feather conversion ---
 
-    data_start: datetime = datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    data_end: datetime = datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    # Use config's parsed dates
+    data_start = config.date_start
+    data_end = config.date_end
 
     # Generate log file name with current timestamp
     current_time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1424,6 +1424,7 @@ def survey(
     date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold (0-100)"),
+    random_seed: Optional[int] = typer.Option(None, help="Seed for random sampling when exporting hashes"),
     export_hashes: Optional[Path] = typer.Option(None, help="Export hash lists to directory (creates cleanware.txt and malware.txt)"),
     show_distribution: bool = typer.Option(True, help="Show temporal distribution of samples"),
     distribution_granularity: str = typer.Option("year", help="Distribution granularity: year, quarter, or month"),
@@ -1438,25 +1439,21 @@ def survey(
 
     console: Console = Console()
 
-    # Display configuration settings
-    console.print("\n[bold cyan]Survey Configuration:[/bold cyan]")
-    config_table = Table(box=box.ROUNDED, show_header=False)
-    config_table.add_column("Parameter", style="cyan")
-    config_table.add_column("Value", style="yellow")
-
-    config_table.add_row("APK List", str(apk_list))
-    config_table.add_row("Cleanware Samples", f"{n_cleanware:,}")
-    config_table.add_row("Malware Samples", f"{n_malware:,}")
-    config_table.add_row("Date Range", f"{date_start} to {date_end}")
-    config_table.add_row("Malware Threshold", f"{malware_threshold}")
-    config_table.add_row("Random Seed", str(random_seed) if random_seed else "Not set")
-    if export_hashes:
-        config_table.add_row("Export Hashes To", str(export_hashes))
-    if show_distribution:
-        config_table.add_row("Distribution", f"Show by {distribution_granularity}")
-
-    console.print(config_table)
-    console.print()
+    # Create and display configuration
+    config = ConfigManager.create_survey_config(
+        api_key=api_key,
+        apk_list=apk_list,
+        n_cleanware=n_cleanware,
+        n_malware=n_malware,
+        date_start=date_start,
+        date_end=date_end,
+        malware_threshold=malware_threshold,
+        random_seed=random_seed,
+        export_hashes=export_hashes,
+        show_distribution=show_distribution,
+        distribution_granularity=distribution_granularity
+    )
+    config.display(console)
 
     # Handle CSV to Feather conversion with validation
     processed_apk_list_path = apk_list
@@ -1483,9 +1480,9 @@ def survey(
                 console.print(f"[bold red]Error: Failed to convert CSV file '{apk_list}'[/bold red]")
                 raise typer.Exit(code=1)
 
-    # Parse dates
-    data_start: datetime = datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    data_end: datetime = datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    # Use config's parsed dates
+    data_start = config.date_start
+    data_end = config.date_end
 
     # Create analyzer instance
     console.print("\n[bold cyan]Starting APK Survey Analysis...[/bold cyan]\n")
@@ -1637,8 +1634,8 @@ def survey(
             export_hashes.mkdir(parents=True, exist_ok=True)
 
             # Sample the data
-            sampled_malware = malware_df.sample(n=min(n_malware, len(malware_df)), shuffle=True, seed=random_seed)
-            sampled_cleanware = cleanware_df.sample(n=min(n_cleanware, len(cleanware_df)), shuffle=True, seed=random_seed)
+            sampled_malware = malware_df.sample(n=min(n_malware, len(malware_df)), shuffle=True, seed=config.random_seed)
+            sampled_cleanware = cleanware_df.sample(n=min(n_cleanware, len(cleanware_df)), shuffle=True, seed=config.random_seed)
 
             # Export malware hashes
             malware_file = export_hashes / "malware.txt"
