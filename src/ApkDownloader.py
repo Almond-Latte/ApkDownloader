@@ -1424,7 +1424,7 @@ def survey(
     date_start: str = typer.Option(settings.DATE_START_STR, help="Start date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     date_end: str = typer.Option(settings.DATE_END_STR, help="End date for filtering APKs (YYYY-MM-DD HH:MM:SS)"),
     malware_threshold: int = typer.Option(settings.MALWARE_THRESHOLD, min=0, max=100, help="VirusTotal detection threshold (0-100)"),
-    random_seed: Optional[int] = typer.Option(None, help="Seed for random sampling when exporting hashes"),
+    random_seed: Optional[int] = typer.Option(settings.RANDOM_SEED, help="Seed for random number generation to ensure reproducibility. If None, seed is not fixed."),
     export_hashes: Optional[Path] = typer.Option(None, help="Export hash lists to directory (creates cleanware.txt and malware.txt)"),
     show_distribution: bool = typer.Option(True, help="Show temporal distribution of samples"),
     distribution_granularity: str = typer.Option("year", help="Distribution granularity: year, quarter, or month"),
